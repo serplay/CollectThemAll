@@ -12,9 +12,18 @@
   "app": {
     "windows": [
       {
-        "title": "cta-collectthemall",
-        "width": 800,
-        "height": 600
+        "title": "CTA - Manager",
+        "label": "main",
+        "width": 1000,
+        "height": 700
+      },
+      {
+        "title": "CTA - Overlay",
+        "label": "overlay",
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false 
       }
     ],
     "security": {
