@@ -1,5 +1,4 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
   "productName": "cta-collectthemall",
   "version": "0.1.0",
   "identifier": "com.cta.app",
@@ -23,11 +22,15 @@
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
-        "visible": false 
+        "visible": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' asset: https://asset.localhost; img-src 'self' asset: https://asset.localhost https://cdn.mapgenie.io;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/assets/**"]
+      }
     }
   },
   "bundle": {
