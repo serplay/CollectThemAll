@@ -80,7 +80,8 @@
     align-items: center;
     justify-content: center;
     position: relative;
-    width: 314px;
+    width: 100%;
+    max-width: 314px;
     height: 70px;
     flex-shrink: 0;
     z-index: 1;

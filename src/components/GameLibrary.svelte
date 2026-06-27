@@ -29,7 +29,7 @@
   <SearchBar bind:value={searchQuery} />
 
   {#if isLoading}
-    <div class="loader">Loading maps...</div>
+    <div class="loader" out:fade={{ duration: 200 }}>Loading maps...</div>
   {:else}
     <div class="grid-layout">
       {#each filteredGames as game, i (game.id)}
@@ -59,16 +59,18 @@
     flex-direction: column;
     align-items: center;
     width: 100%;
+    max-width: 100%;
     padding-inline: 1.5rem;
     padding-bottom: 2rem;
-    max-width: 1400px;
     margin: 0 auto;
   }
 
   .grid-layout {
     width: 100%;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    max-width: 1400px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 1.25rem;
   }
 
@@ -78,6 +80,8 @@
     align-items: center;
     gap: 0.5rem;
     cursor: pointer;
+    flex: 1 1 180px;
+    max-width: 240px;
     transition: transform 0.2s ease;
   }
 
@@ -88,7 +92,7 @@
   .game-tile img,
   .img-placeholder {
     width: 100%;
-    aspect-ratio: 16/9;
+    aspect-ratio: 16 / 9;
     border-radius: 10px;
     object-fit: cover;
     background: #161329;
@@ -106,6 +110,8 @@
   .tile-title {
     font-size: 0.9rem;
     text-align: center;
+    width: 100%;
+    overflow-wrap: break-word;
   }
 
   .loader {
