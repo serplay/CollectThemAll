@@ -9,9 +9,7 @@
 //! For now this file (`mod.rs`) is still the main entry point; we move things out
 //! into sibling modules one step at a time.
 
-use reqwest::Client;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,33 +38,13 @@ use parsing::*;
 mod cache;
 use cache::*;
 
-// --- Helper Functions ---
+// Slicing the marker sprite sheet into individual icons.
+mod sprites;
+use sprites::*;
 
-async fn fetch_map_tile_config(
-    client: &Client,
-    game_slug: &str,
-    map_slug: &str,
-) -> Result<(MapConfig, serde_json::Value), String> {
-    let url = format!("https://mapgenie.io/{}/maps/{}", game_slug, map_slug);
-    let html = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let map_data_json = extract_named_var_json(&html, "window.mapData = ")?;
-    let parsed: MapDataHtml =
-        serde_json::from_value(map_data_json.clone()).map_err(|e| e.to_string())?;
-
-    // Also return the raw mapData JSON so callers can extract other fields (e.g. MARKER_SPRITE_POSITIONS_V3)
-    let marker_positions = extract_named_var_json(&html, "const MARKER_SPRITE_POSITIONS_V3 = ")
-        .unwrap_or(serde_json::Value::Null);
-
-    Ok((parsed.map_config, marker_positions))
-}
+// Fetching map pages and extracting their config (web scraping).
+mod scraping;
+use scraping::*;
 
 // --- Commands ---
 
@@ -652,31 +630,4 @@ pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>
     let _ = fs::write(&tile_path, &bytes).await;
 
     ok_response(bytes)
-}
-
-// --- Private helpers ---
-
-/// Crops each named region out of the sprite sheet and saves it as its own PNG.
-fn slice_marker_sprites(
-    sprite_path: &PathBuf,
-    out_dir: &PathBuf,
-    markers: &HashMap<String, MarkerSpriteEntry>,
-) -> Result<(), String> {
-    let sheet = image::open(sprite_path).map_err(|e| e.to_string())?;
-    let (sheet_w, sheet_h) = (sheet.width(), sheet.height());
-
-    for (name, entry) in markers {
-        if entry.width == 0 || entry.height == 0 {
-            continue;
-        }
-        if entry.x + entry.width > sheet_w || entry.y + entry.height > sheet_h {
-            continue;
-        }
-
-        let cropped = sheet.crop_imm(entry.x, entry.y, entry.width, entry.height);
-        let out_path = out_dir.join(format!("{}.png", name));
-        cropped.save(&out_path).map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
 }
