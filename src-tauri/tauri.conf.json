@@ -1,7 +1,7 @@
 {
   "productName": "cta-collectthemall",
   "version": "1.0.0",
-  "identifier": "com.CollectThemAll",
+  "identifier": "CollectThemAll",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
