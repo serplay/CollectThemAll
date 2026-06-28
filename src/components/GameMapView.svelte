@@ -7,9 +7,9 @@
   import type { Game, Map as GameMap } from '../lib/types/mapgenie';
   import { loadFoundIds, toggleFound, clearFound, setFoundIds } from '../lib/stores/foundMarkers';
   // Small, focused helpers extracted from this component for the modularity assignment.
-  import { simpleMarkdownToHtml } from '../lib/map/markdown';
   import { buildLocationGeoJson } from '../lib/map/geojson';
   import { buildTileUrlTemplate } from '../lib/map/tileUrl';
+  import { buildMarkerPopupElement } from '../lib/map/popup';
 
   // Identifies this window so we ignore our own broadcasts (we already updated locally).
   let windowLabel = '';
@@ -225,60 +225,27 @@
           activePopup = null;
         }
 
-        const hasImage = mediaItems.length > 0 && mediaItems[0].type === 'image';
-        const mediaHtml = hasImage
-          ? `<div class="popup-img-wrap">
-               <div class="popup-img-spinner" aria-hidden="true"></div>
-               <img class="popup-media" src="${mediaItems[0].url}" alt="" />
-             </div>`
-          : '';
-        const descHtml = rawDescription
-          ? `<div class="popup-desc">${simpleMarkdownToHtml(rawDescription)}</div>`
-          : '';
-        const catHtml = catLabel
-          ? `<div class="popup-category">${catIconUrl ? `<img src="${catIconUrl}" class="popup-cat-icon" alt="" />` : ''}${catLabel}</div>`
-          : '';
-
         const coords = (feature.geometry as any).coordinates.slice();
-        const popupEl = document.createElement('div');
-        popupEl.className = 'marker-popup';
-        popupEl.innerHTML = `
-          ${mediaHtml}
-          <div class="popup-body">
-            ${catHtml}
-            <div class="popup-title">${locTitle}</div>
-            ${descHtml}
-            <button class="popup-toggle ${isFound ? 'found' : ''}">
-              ${isFound ? '✓ Found — click to unmark' : 'Mark as found'}
-            </button>
-          </div>
-        `;
-
-        // Wire up image loading: show spinner until loaded, hide on error
-        const img = popupEl.querySelector('.popup-media') as HTMLImageElement | null;
-        if (img) {
-          const spinner = img.previousElementSibling as HTMLElement | null;
-          img.addEventListener('load', () => {
-            if (spinner) spinner.style.display = 'none';
-            img.style.opacity = '1';
-          });
-          img.addEventListener('error', () => {
-            if (spinner) spinner.style.display = 'none';
-            img.style.display = 'none';
-          });
-        }
-
-        const btn = popupEl.querySelector('.popup-toggle')!;
-        btn.addEventListener('click', () => {
-          if (!activeMap) return;
-          const [updated, nowFound] = toggleFound(game.id, activeMap.id, locId);
-          foundIds = updated;
-          updateFoundState();
-          broadcastFoundChange();
-
-          btn.className = `popup-toggle ${nowFound ? 'found' : ''}`;
-          btn.textContent = nowFound ? '✓ Found — click to unmark' : 'Mark as found';
-        });
+        // Build the popup DOM in lib/map/popup.ts; we keep the state change here
+        // (toggleFound + rebroadcast) and just hand the builder a callback.
+        const popupEl = buildMarkerPopupElement(
+          {
+            title: locTitle,
+            isFound,
+            categoryLabel: catLabel,
+            categoryIconUrl: catIconUrl,
+            description: rawDescription,
+            media: mediaItems,
+          },
+          () => {
+            if (!activeMap) return false;
+            const [updated, nowFound] = toggleFound(game.id, activeMap.id, locId);
+            foundIds = updated;
+            updateFoundState();
+            broadcastFoundChange();
+            return nowFound;
+          },
+        );
 
         activePopup = new maplibregl.Popup({ offset: 25, closeOnClick: true, maxWidth: '280px' })
           .setLngLat(coords)
