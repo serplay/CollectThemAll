@@ -15,14 +15,6 @@
         "label": "main",
         "width": 1000,
         "height": 700
-      },
-      {
-        "title": "CollectThemAll - Overlay",
-        "label": "overlay",
-        "transparent": true,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "visible": false
       }
     ],
     "security": {
