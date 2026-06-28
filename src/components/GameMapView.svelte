@@ -2,13 +2,34 @@
   import { onMount, onDestroy } from 'svelte';
   import maplibregl from 'maplibre-gl';
   import 'maplibre-gl/dist/maplibre-gl.css';
+  import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { getMapData, getMarkerIconUrl, ensureTileMeta } from '../lib/api/mapgenie';
   import type { Game, Map as GameMap } from '../lib/types/mapgenie';
-  import { loadFoundIds, toggleFound, clearFound } from '../lib/stores/foundMarkers';
+  import { loadFoundIds, toggleFound, clearFound, setFoundIds } from '../lib/stores/foundMarkers';
 
-  let { game }: { game: Game } = $props();
+  // Identifies this window so we ignore our own broadcasts (we already updated locally).
+  let windowLabel = '';
+  try {
+    // @ts-expect-error — __TAURI_INTERNALS__ is injected by Tauri at runtime
+    windowLabel = window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? '';
+  } catch { /* not under Tauri */ }
 
-  let activeMap = $state<GameMap | null>(game.maps[0] ?? null);
+  // The full found-id list rides along in the payload because WebView windows don't share
+  // their in-memory localStorage cache live — the receiver can't reliably re-read it.
+  type FoundChange = { gameId: number; mapId: number; source: string; ids: number[] };
+
+  let {
+    game,
+    initialMapId,
+    overlay = false,
+  }: { game: Game; initialMapId?: number; overlay?: boolean } = $props();
+
+  const initialMap =
+    (initialMapId != null ? game.maps.find((m) => m.id === initialMapId) : undefined) ??
+    game.maps[0] ??
+    null;
+
+  let activeMap = $state<GameMap | null>(initialMap);
   let mapInstance: maplibregl.Map | null = null;
   let mapContainer: HTMLElement;
   let categories = $state<{ id: number; label: string; iconUrl: string | null }[]>([]);
@@ -35,6 +56,17 @@
     isLoadingMap = true;
     loadError = null;
     activeMap = map;
+
+    // Remember the last-opened map so the in-game overlay (Ctrl+Alt+`) can mirror it.
+    // Skipped from the overlay itself so it never overrides the main window's choice.
+    if (!overlay) {
+      try {
+        localStorage.setItem('cta:lastMap', JSON.stringify({ gameId: game.id, mapId: map.id }));
+      } catch { /* localStorage unavailable — non-fatal */ }
+      // Broadcast to the overlay window so it re-syncs live. The storage event isn't
+      // reliable across Tauri webviews, so this Tauri event is the primary signal.
+      emit('cta:map-changed', { gameId: game.id, mapId: map.id }).catch(() => {});
+    }
 
     if (mapInstance) {
       mapInstance.remove();
@@ -273,6 +305,7 @@
           const [updated, nowFound] = toggleFound(game.id, activeMap.id, locId);
           foundIds = updated;
           updateFoundState();
+          broadcastFoundChange();
 
           btn.className = `popup-toggle ${nowFound ? 'found' : ''}`;
           btn.textContent = nowFound ? '✓ Found — click to unmark' : 'Mark as found';
@@ -354,6 +387,28 @@
     clearFound(game.id, activeMap.id);
     foundIds = new Set();
     updateFoundState();
+    broadcastFoundChange();
+  }
+
+  /** Notify the other window (main ↔ overlay) that this map's found set changed, sending the
+   *  full id list so the receiver can apply it directly. `source` lets us ignore our own echo. */
+  function broadcastFoundChange() {
+    if (!activeMap) return;
+    emit('cta:found-changed', {
+      gameId: game.id,
+      mapId: activeMap.id,
+      source: windowLabel,
+      ids: [...foundIds],
+    } satisfies FoundChange).catch(() => {});
+  }
+
+  /** Apply a found set pushed from the other window: update local state, persist it to this
+   *  window's localStorage, and refresh the map + progress UI. */
+  function applyFoundChange(ids: number[]) {
+    if (!activeMap) return;
+    foundIds = new Set(ids);
+    setFoundIds(game.id, activeMap.id, foundIds);
+    updateFoundState();
   }
 
   /** Count how many found markers belong to a specific category. */
@@ -368,16 +423,33 @@
     return count;
   }
 
+  let unlistenFound: UnlistenFn | null = null;
+
   onMount(() => {
     if (activeMap) loadMap(activeMap);
+
+    // Two-way live sync of found markers between the main window and the overlay.
+    listen<FoundChange>('cta:found-changed', (e) => {
+      const p = e.payload;
+      if (p.source === windowLabel) return; // ignore our own broadcast
+      if (!activeMap || p.gameId !== game.id || p.mapId !== activeMap.id) return;
+      applyFoundChange(p.ids);
+    })
+      .then((fn) => { unlistenFound = fn; })
+      .catch(() => { /* not under Tauri */ });
   });
 
-  onDestroy(() => mapInstance?.remove());
+  onDestroy(() => {
+    unlistenFound?.();
+    mapInstance?.remove();
+  });
 </script>
 
-<div class="map-page">
+<div class="map-page" class:overlay>
   <aside class="sidebar">
-    <a href="/" class="back-link">← Back to library</a>
+    {#if !overlay}
+      <a href="/" class="back-link">← Back to library</a>
+    {/if}
     <h2 class="game-title">{game.title}</h2>
 
     <div class="map-switcher">
@@ -457,6 +529,11 @@
     display: flex;
     height: 100vh;
     width: 100%;
+  }
+
+  /* In the overlay window the map fills its (bar-offset) container, not the viewport. */
+  .map-page.overlay {
+    height: 100%;
   }
 
   .sidebar {

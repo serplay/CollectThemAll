@@ -28,6 +28,12 @@ function saveFoundIds(gameId: number, mapId: number, ids: Set<number>): void {
   localStorage.setItem(storageKey(gameId, mapId), JSON.stringify([...ids]));
 }
 
+/** Replace the full set of found location IDs (used to apply a change pushed from another
+ *  window, since WebView windows don't share their in-memory localStorage cache live). */
+export function setFoundIds(gameId: number, mapId: number, ids: Set<number>): void {
+  saveFoundIds(gameId, mapId, ids);
+}
+
 /** Mark a single location as found. Returns the updated set. */
 export function markFound(gameId: number, mapId: number, locationId: number): Set<number> {
   const ids = loadFoundIds(gameId, mapId);
