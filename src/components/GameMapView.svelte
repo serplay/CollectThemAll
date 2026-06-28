@@ -24,36 +24,11 @@
   // Our own reference to the GeoJSON data so we can update it reliably
   let geoJsonData: { type: 'FeatureCollection'; features: any[] } = { type: 'FeatureCollection', features: [] };
 
-  // Some older MapGenie games (e.g. RDR2) store location lat/lng in a large-scale coordinate
-  // space (lat ~-52 to 82, lng ~-164 to 135) rather than directly in the bounds space
-  // ([-1.4, 0, 0, 1.4]). Detect by checking whether a sample latitude sits outside bounds.
-  function buildCoordNormalizer(
-    locations: any[],
-    bounds: [number, number, number, number]
-  ): (lat: number, lng: number) => [number, number] {
-    const [west, south, east, north] = bounds;
-    const sampleLat = parseFloat(locations[0]?.latitude ?? '0');
-
-    if (sampleLat >= south - 0.1 && sampleLat <= north + 0.1) {
-      // Already in bounds space — use directly
-      return (lat, lng) => [lng, lat];
-    }
-
-    // Legacy coordinate system — compute linear normalization to bounds space
-    const lats = locations.map((l: any) => parseFloat(l.latitude));
-    const lngs = locations.map((l: any) => parseFloat(l.longitude));
-    const latMin = lats.reduce((a: number, b: number) => Math.min(a, b));
-    const latMax = lats.reduce((a: number, b: number) => Math.max(a, b));
-    const lngMin = lngs.reduce((a: number, b: number) => Math.min(a, b));
-    const lngMax = lngs.reduce((a: number, b: number) => Math.max(a, b));
-    const lngSpan = east - west;
-    const latSpan = north - south;
-
-    return (lat, lng) => {
-      const normLng = ((lng - lngMin) / (lngMax - lngMin)) * lngSpan + west;
-      const normLat = ((lat - latMin) / (latMax - latMin)) * latSpan + south;
-      return [normLng, normLat];
-    };
+  function simpleMarkdownToHtml(text: string): string {
+    return text
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/\n/g, '<br>');
   }
 
   async function loadMap(map: GameMap) {
@@ -88,17 +63,19 @@
       return;
     }
 
-    const bounds = mapJsonData.styles?.mapStyle?.bounds as
-      | [number, number, number, number]
-      | undefined;
-    if (!bounds) {
-      loadError = 'Map bounds not found in map data.';
-      isLoadingMap = false;
-      return;
-    }
-    const [west, south, east, north] = bounds;
-    const lngSpan = east - west;
-    const latSpan = north - south;
+    // MapGenie renders with MapLibre/Mapbox GL using *real* Web Mercator: location
+    // latitude/longitude are already EPSG:4326 lng/lat, and the tiles are standard XYZ
+    // Web Mercator tiles. So we feed raw coordinates straight through — no normalization.
+    // The view (center/zoom) and zoom range come from the map config, mirroring MapGenie's
+    // own setup: center=[start_lng,start_lat], zoom=initial_zoom-1, min/max zoom one below
+    // the tile range (their tile z is offset by 1 from the MapLibre zoom).
+    const tileMinZoom = tileMeta.min_zoom;
+    const tileMaxZoom = tileMeta.max_zoom;
+    const mapMinZoom = Math.max(0, tileMinZoom - 1);
+    const mapMaxZoom = Math.max(mapMinZoom, tileMaxZoom - 1);
+    const initLng = map.initial_longitude ?? 0;
+    const initLat = map.initial_latitude ?? 0;
+    const initZoom = Math.max(mapMinZoom, Math.min(mapMaxZoom, (map.initial_zoom ?? tileMinZoom) - 1));
 
     // Build category list from locations (dedup by category_id)
     const locations: any[] = mapJsonData.locations ?? [];
@@ -110,7 +87,6 @@
     }
     categoryLocationCounts = catCounts;
     totalLocations = locations.length;
-    const toMapCoords = buildCoordNormalizer(locations, bounds);
 
     // Load found state from localStorage
     foundIds = loadFoundIds(game.id, map.id);
@@ -125,10 +101,6 @@
     categories = catList;
     visibleCategoryIds = new Set(catList.map((c) => c.id));
 
-    // MapGenie stores tiles at true Web Mercator zoom levels — use them directly.
-    const wmMinZoom = tileMeta.min_zoom;
-    const wmMaxZoom = tileMeta.max_zoom;
-
     // Tauri exposes custom URI schemes differently per platform: on Windows/Android the
     // scheme is mapped to http://<scheme>.localhost (WebView2 doesn't support raw custom
     // schemes via fetch), elsewhere it's <scheme>://localhost. MapLibre fetches tiles from
@@ -142,10 +114,11 @@
     mapInstance = new maplibregl.Map({
       container: mapContainer,
       style: { version: 8, sources: {}, layers: [] },
-      bounds: [
-        [west, south],
-        [east, north],
-      ],
+      center: [initLng, initLat],
+      zoom: initZoom,
+      minZoom: mapMinZoom,
+      maxZoom: mapMaxZoom,
+      renderWorldCopies: false,
     });
 
     // Provide a transparent 1×1 fallback for any image MapLibre can't find,
@@ -163,8 +136,8 @@
         type: 'raster',
         tiles: [tileUrlTemplate],
         tileSize: 256,
-        minzoom: wmMinZoom,
-        maxzoom: wmMaxZoom,
+        minzoom: mapMinZoom,
+        maxzoom: tileMaxZoom,
       });
       mapInstance.addLayer({ id: 'tiles-layer', type: 'raster', source: 'game-tiles' });
 
@@ -185,17 +158,18 @@
         features: locations
           .filter((loc: any) => loc.latitude && loc.longitude)
           .map((loc: any) => {
-            const [normLng, normLat] = toMapCoords(
-              parseFloat(loc.latitude),
-              parseFloat(loc.longitude)
-            );
             return {
               type: 'Feature' as const,
-              geometry: { type: 'Point' as const, coordinates: [normLng, normLat] },
+              geometry: {
+                type: 'Point' as const,
+                coordinates: [parseFloat(loc.longitude), parseFloat(loc.latitude)],
+              },
               properties: {
                 id: loc.id,
                 title: loc.title,
                 category_id: loc.category_id,
+                description: loc.description ?? '',
+                media: JSON.stringify(loc.media ?? []),
                 found: foundIds.has(loc.id) ? 1 : 0,
               },
             };
@@ -237,6 +211,12 @@
         if (!locId || !activeMap) return;
 
         const isFound = foundIds.has(locId);
+        const catId = feature.properties?.category_id;
+        const catLabel = categories.find((c) => c.id === catId)?.label ?? '';
+        const catIconUrl = categories.find((c) => c.id === catId)?.iconUrl ?? '';
+        const rawDescription: string = feature.properties?.description ?? '';
+        let mediaItems: { url: string; type: string }[] = [];
+        try { mediaItems = JSON.parse(feature.properties?.media ?? '[]'); } catch { /* noop */ }
 
         // Close any existing popup
         if (activePopup) {
@@ -244,15 +224,48 @@
           activePopup = null;
         }
 
+        const hasImage = mediaItems.length > 0 && mediaItems[0].type === 'image';
+        const mediaHtml = hasImage
+          ? `<div class="popup-img-wrap">
+               <div class="popup-img-spinner" aria-hidden="true"></div>
+               <img class="popup-media" src="${mediaItems[0].url}" alt="" />
+             </div>`
+          : '';
+        const descHtml = rawDescription
+          ? `<div class="popup-desc">${simpleMarkdownToHtml(rawDescription)}</div>`
+          : '';
+        const catHtml = catLabel
+          ? `<div class="popup-category">${catIconUrl ? `<img src="${catIconUrl}" class="popup-cat-icon" alt="" />` : ''}${catLabel}</div>`
+          : '';
+
         const coords = (feature.geometry as any).coordinates.slice();
         const popupEl = document.createElement('div');
         popupEl.className = 'marker-popup';
         popupEl.innerHTML = `
-          <div class="popup-title">${locTitle}</div>
-          <button class="popup-toggle ${isFound ? 'found' : ''}">
-            ${isFound ? '✓ Found — click to unmark' : 'Mark as found'}
-          </button>
+          ${mediaHtml}
+          <div class="popup-body">
+            ${catHtml}
+            <div class="popup-title">${locTitle}</div>
+            ${descHtml}
+            <button class="popup-toggle ${isFound ? 'found' : ''}">
+              ${isFound ? '✓ Found — click to unmark' : 'Mark as found'}
+            </button>
+          </div>
         `;
+
+        // Wire up image loading: show spinner until loaded, hide on error
+        const img = popupEl.querySelector('.popup-media') as HTMLImageElement | null;
+        if (img) {
+          const spinner = img.previousElementSibling as HTMLElement | null;
+          img.addEventListener('load', () => {
+            if (spinner) spinner.style.display = 'none';
+            img.style.opacity = '1';
+          });
+          img.addEventListener('error', () => {
+            if (spinner) spinner.style.display = 'none';
+            img.style.display = 'none';
+          });
+        }
 
         const btn = popupEl.querySelector('.popup-toggle')!;
         btn.addEventListener('click', () => {
@@ -261,12 +274,11 @@
           foundIds = updated;
           updateFoundState();
 
-          // Update popup button
           btn.className = `popup-toggle ${nowFound ? 'found' : ''}`;
           btn.textContent = nowFound ? '✓ Found — click to unmark' : 'Mark as found';
         });
 
-        activePopup = new maplibregl.Popup({ offset: 25, closeOnClick: true })
+        activePopup = new maplibregl.Popup({ offset: 25, closeOnClick: true, maxWidth: '280px' })
           .setLngLat(coords)
           .setDOMContent(popupEl)
           .addTo(mapInstance);
@@ -644,39 +656,146 @@
   }
 
   /* ── Marker popup styles (global, not scoped) ── */
+
+  /* Override MapLibre's default popup chrome to match dark theme */
+  :global(.maplibregl-popup-content) {
+    background: rgba(18, 14, 36, 0.92) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(167, 139, 250, 0.25);
+    border-radius: 10px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+    padding: 0 !important;
+    overflow: hidden;
+    color: #f0ecff;
+    font-family: inherit;
+    min-width: 200px;
+    max-width: 280px;
+  }
+
+  :global(.maplibregl-popup-tip) {
+    border-top-color: rgba(18, 14, 36, 0.92) !important;
+  }
+
+  :global(.maplibregl-popup-close-button) {
+    color: #a78bfa !important;
+    font-size: 1rem;
+    padding: 0.3rem 0.5rem;
+    top: 4px;
+    right: 4px;
+  }
+
   :global(.marker-popup) {
-    text-align: center;
-    min-width: 140px;
+    width: 100%;
+  }
+
+  :global(.popup-img-wrap) {
+    position: relative;
+    background: #0d0b1e;
+    min-height: 72px;
+  }
+
+  :global(.popup-img-spinner) {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  :global(.popup-img-spinner::after) {
+    content: '';
+    width: 22px;
+    height: 22px;
+    border: 2px solid rgba(167, 139, 250, 0.35);
+    border-top-color: #a78bfa;
+    border-radius: 50%;
+    animation: popup-spin 0.7s linear infinite;
+  }
+
+  :global(.popup-media) {
+    display: block;
+    width: 100%;
+    max-height: 160px;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  :global(.popup-body) {
+    padding: 0.75rem;
+  }
+
+  :global(.popup-category) {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #a78bfa;
+    margin-bottom: 0.3rem;
+  }
+
+  :global(.popup-cat-icon) {
+    width: 14px;
+    height: 14px;
+    object-fit: contain;
+    flex-shrink: 0;
   }
 
   :global(.popup-title) {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #f0ecff;
+    margin-bottom: 0.5rem;
+    line-height: 1.3;
+  }
+
+  :global(.popup-desc) {
+    font-size: 0.78rem;
+    color: #c4b5fd;
+    line-height: 1.5;
+    margin-bottom: 0.65rem;
+    max-height: 100px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #4c3a7c transparent;
+  }
+
+  :global(.popup-desc strong) {
+    color: #e9d5ff;
     font-weight: 600;
-    font-size: 0.85rem;
-    margin-bottom: 0.4rem;
-    color: #1a1a2e;
+  }
+
+  :global(.popup-desc em) {
+    color: #d8b4fe;
   }
 
   :global(.popup-toggle) {
-    display: inline-block;
-    background: #7c3aed;
+    display: block;
+    width: 100%;
+    background: linear-gradient(135deg, #7c3aed, #cf30aa);
     color: #fff;
     border: none;
-    border-radius: 4px;
-    padding: 0.3rem 0.7rem;
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
     font-size: 0.8rem;
+    font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: opacity 0.15s;
+    text-align: center;
   }
 
   :global(.popup-toggle:hover) {
-    background: #6d28d9;
+    opacity: 0.85;
   }
 
   :global(.popup-toggle.found) {
-    background: #16a34a;
+    background: linear-gradient(135deg, #16a34a, #15803d);
   }
 
-  :global(.popup-toggle.found:hover) {
-    background: #15803d;
+  @keyframes popup-spin {
+    to { transform: rotate(360deg); }
   }
 </style>
