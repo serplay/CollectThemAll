@@ -6,6 +6,10 @@
   import { getMapData, getMarkerIconUrl, ensureTileMeta } from '../lib/api/mapgenie';
   import type { Game, Map as GameMap } from '../lib/types/mapgenie';
   import { loadFoundIds, toggleFound, clearFound, setFoundIds } from '../lib/stores/foundMarkers';
+  // Small, focused helpers extracted from this component for the modularity assignment.
+  import { simpleMarkdownToHtml } from '../lib/map/markdown';
+  import { buildLocationGeoJson } from '../lib/map/geojson';
+  import { buildTileUrlTemplate } from '../lib/map/tileUrl';
 
   // Identifies this window so we ignore our own broadcasts (we already updated locally).
   let windowLabel = '';
@@ -44,13 +48,6 @@
   let categoryLocationCounts = $state<Map<number, number>>(new Map());
   // Our own reference to the GeoJSON data so we can update it reliably
   let geoJsonData: { type: 'FeatureCollection'; features: any[] } = { type: 'FeatureCollection', features: [] };
-
-  function simpleMarkdownToHtml(text: string): string {
-    return text
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/\n/g, '<br>');
-  }
 
   async function loadMap(map: GameMap) {
     isLoadingMap = true;
@@ -133,15 +130,8 @@
     categories = catList;
     visibleCategoryIds = new Set(catList.map((c) => c.id));
 
-    // Tauri exposes custom URI schemes differently per platform: on Windows/Android the
-    // scheme is mapped to http://<scheme>.localhost (WebView2 doesn't support raw custom
-    // schemes via fetch), elsewhere it's <scheme>://localhost. MapLibre fetches tiles from
-    // a WebWorker using fetch(), which only accepts standard schemes, so we must use the
-    // platform-correct form rather than a hardcoded "tile://".
-    const tileBase = navigator.userAgent.includes('Windows')
-      ? 'http://tile.localhost'
-      : 'tile://localhost';
-    const tileUrlTemplate = `${tileBase}/${game.id}/${map.id}/{z}/{x}/{y}`;
+    // Platform-correct tile URL template (see lib/map/tileUrl.ts for the why).
+    const tileUrlTemplate = buildTileUrlTemplate(game.id, map.id);
 
     mapInstance = new maplibregl.Map({
       container: mapContainer,
@@ -184,29 +174,8 @@
         }
       }
 
-      // Build GeoJSON features from all locations, including found state
-      geoJsonData = {
-        type: 'FeatureCollection',
-        features: locations
-          .filter((loc: any) => loc.latitude && loc.longitude)
-          .map((loc: any) => {
-            return {
-              type: 'Feature' as const,
-              geometry: {
-                type: 'Point' as const,
-                coordinates: [parseFloat(loc.longitude), parseFloat(loc.latitude)],
-              },
-              properties: {
-                id: loc.id,
-                title: loc.title,
-                category_id: loc.category_id,
-                description: loc.description ?? '',
-                media: JSON.stringify(loc.media ?? []),
-                found: foundIds.has(loc.id) ? 1 : 0,
-              },
-            };
-          }),
-      };
+      // Build GeoJSON features from all locations, including found state.
+      geoJsonData = buildLocationGeoJson(locations, foundIds);
 
       mapInstance.addSource('locations', {
         type: 'geojson',
