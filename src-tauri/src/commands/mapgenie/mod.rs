@@ -10,7 +10,6 @@
 //! into sibling modules one step at a time.
 
 use reqwest::Client;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,6 +23,10 @@ use tokio::fs;
 // rest of the code can keep using them by their short names (Game, Map, ...).
 mod models;
 pub use models::*;
+
+// The scraped tile-configuration structs and their custom deserializer.
+mod tile_config;
+use tile_config::*;
 
 /// Max simultaneous tile downloads. Tiles are tiny so we can fan out fairly wide
 /// without overwhelming the CDN; this is the main lever for download speed.
@@ -39,84 +42,6 @@ static TILE_META_CACHE: OnceLock<tokio::sync::Mutex<HashMap<(u32, u32), TileMeta
 
 fn tile_client() -> &'static Client {
     TILE_CLIENT.get_or_init(|| build_client().expect("failed to build tile HTTP client"))
-}
-
-// --- Tile config structs (parsed from window.mapData.mapConfig in map page HTML) ---
-
-#[derive(Debug, Deserialize)]
-struct MinMax {
-    min: u32,
-    max: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct TileSetBounds {
-    x: MinMax,
-    y: MinMax,
-}
-
-/// Deserializes tile bounds, which MapGenie encodes inconsistently across games:
-///   - an object keyed by zoom-level string (e.g. {"3": {x,y}, ...}) — most games
-///   - an array indexed by zoom level (e.g. [{x,y}, {x,y}, ...]) — e.g. Far Cry New Dawn
-///   - null — maps with no per-zoom bounds
-/// All forms are normalized to a HashMap keyed by zoom-level string. Array indices become
-/// the zoom keys. The visitor MUST fully drain a sequence, or serde_json errors with
-/// "invalid length N, expected fewer elements in array".
-fn deserialize_tile_bounds<'de, D>(d: D) -> Result<HashMap<String, TileSetBounds>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::{MapAccess, SeqAccess, Visitor};
-    struct V;
-    impl<'de> Visitor<'de> for V {
-        type Value = HashMap<String, TileSetBounds>;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "a map, null, or sequence")
-        }
-        fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
-            let mut map = HashMap::new();
-            while let Some((k, v)) = a.next_entry::<String, TileSetBounds>()? {
-                map.insert(k, v);
-            }
-            Ok(map)
-        }
-        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(HashMap::new()) }
-        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(HashMap::new()) }
-        fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
-            // Array form: index = zoom level. Drain fully and key by index.
-            let mut map = HashMap::new();
-            let mut idx = 0usize;
-            while let Some(v) = a.next_element::<Option<TileSetBounds>>()? {
-                if let Some(b) = v {
-                    map.insert(idx.to_string(), b);
-                }
-                idx += 1;
-            }
-            Ok(map)
-        }
-    }
-    d.deserialize_any(V)
-}
-
-#[derive(Debug, Deserialize)]
-struct TileSet {
-    pattern: String,
-    extension: String,
-    min_zoom: u32,
-    max_zoom: u32,
-    #[serde(deserialize_with = "deserialize_tile_bounds")]
-    bounds: HashMap<String, TileSetBounds>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MapConfig {
-    tile_sets: Vec<TileSet>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MapDataHtml {
-    #[serde(rename = "mapConfig")]
-    map_config: MapConfig,
 }
 
 // --- Helper Functions ---
