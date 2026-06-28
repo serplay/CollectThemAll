@@ -4,6 +4,7 @@
   import { fetchGames, downloadGameAssets } from '../../../lib/api/mapgenie';
   import type { Game } from '../../../lib/types/mapgenie';
   import GameMapView from '../../../components/GameMapView.svelte';
+  import Background from '../../../components/Background.svelte';
 
   let game = $state<Game | null>(null);
   let isLoading = $state(true);
@@ -35,11 +36,23 @@
 </script>
 
 {#if isLoading}
-  <div class="status">Loading...</div>
+  <Background />
+  <div class="status">
+    <a href="/" class="back-link">← Back</a>
+    <p>Loading...</p>
+  </div>
 {:else if isDownloading}
-  <div class="status">Downloading map assets...</div>
+  <Background />
+  <div class="status">
+    <a href="/" class="back-link">← Back</a>
+    <p>Downloading map assets...</p>
+  </div>
 {:else if loadError}
-  <div class="status">{loadError}</div>
+  <Background />
+  <div class="status">
+    <a href="/" class="back-link">← Back</a>
+    <p>{loadError}</p>
+  </div>
 {:else if game}
   <GameMapView {game} />
 {/if}
@@ -49,5 +62,24 @@
     color: #c0b9c0;
     padding: 3rem;
     text-align: center;
+    position: relative;
+    z-index: 1;
   }
-</style>
+
+  .status p {
+    margin: 0;
+  }
+
+  .back-link {
+    display: inline-block;
+    margin-bottom: 1.5rem;
+    color: #a78bfa;
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: color 0.15s;
+  }
+
+  .back-link:hover {
+    color: #c4b5fd;
+  }
+</style>
