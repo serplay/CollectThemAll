@@ -1,7 +1,7 @@
 {
   "productName": "cta-collectthemall",
   "version": "0.1.0",
-  "identifier": "com.cta.app",
+  "identifier": "com.CollectThemAll",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -11,13 +11,13 @@
   "app": {
     "windows": [
       {
-        "title": "CTA - Manager",
+        "title": "CollectThemAll - Manager",
         "label": "main",
         "width": 1000,
         "height": 700
       },
       {
-        "title": "CTA - Overlay",
+        "title": "CollectThemAll - Overlay",
         "label": "overlay",
         "transparent": true,
         "decorations": false,
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' asset: https://asset.localhost; img-src 'self' asset: https://asset.localhost https://cdn.mapgenie.io;",
+      "csp": "default-src 'self' asset: http://asset.localhost https://asset.localhost tile: http://tile.localhost https://tile.localhost; img-src 'self' asset: http://asset.localhost https://asset.localhost tile: http://tile.localhost https://tile.localhost https://cdn.mapgenie.io; connect-src 'self' ipc: http://ipc.localhost tile: http://tile.localhost https://tile.localhost asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/assets/**"]

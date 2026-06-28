@@ -1,6 +1,7 @@
 export interface Game {
   id: number;
   title: string;
+  slug: string;
   status: string;
   image: string | null;
   logo: string | null;

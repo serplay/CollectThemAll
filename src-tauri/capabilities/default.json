@@ -9,6 +9,7 @@
       "identifier": "fs:scope",
       "allow": [{ "path": "$APPDATA/assets/**" }]
     },
-    "fs:allow-exists"
+    "fs:allow-exists",
+    "fs:allow-read-text-file"
   ]
 }
