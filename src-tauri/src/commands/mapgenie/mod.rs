@@ -1,5 +1,16 @@
+//! MapGenie integration module.
+//!
+//! Cybersecurity studies note (1st year, 2nd semester): a big single file is hard
+//! to audit. For this assignment we are splitting the old 900-line file into smaller
+//! modules so each piece does one job — this is the "separation of concerns" idea
+//! from our software security lectures. Smaller files = easier to read = easier to
+//! spot mistakes.
+//!
+//! For now this file (`mod.rs`) is still the main entry point; we move things out
+//! into sibling modules one step at a time.
+
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,6 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::http::{Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::fs;
+
+// The data "shapes" now live in their own file. We pull them back in here so the
+// rest of the code can keep using them by their short names (Game, Map, ...).
+mod models;
+pub use models::*;
 
 /// Max simultaneous tile downloads. Tiles are tiny so we can fan out fairly wide
 /// without overwhelming the CDN; this is the main lever for download speed.
@@ -25,65 +41,7 @@ fn tile_client() -> &'static Client {
     TILE_CLIENT.get_or_init(|| build_client().expect("failed to build tile HTTP client"))
 }
 
-// --- Data Structures ---
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Game {
-    pub id: u32,
-    pub title: String,
-    pub slug: String,
-    pub status: String,
-    pub image: Option<String>,
-    pub logo: Option<String>,
-    pub config: GameConfig,
-    pub maps: Vec<Map>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GameConfig {
-    pub cdn_url: String,
-    pub tiles_base_url: String,
-    pub presets_enabled: bool,
-    pub marker_sprite_url: String,
-    pub compass_enabled: bool,
-    pub heatmaps_enabled: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Map {
-    pub id: u32,
-    pub game_id: u32,
-    pub title: String,
-    pub slug: String,
-    pub image: Option<String>,
-    pub order: i32,
-    pub enabled: bool,
-    pub available: bool,
-    pub work_in_progress: bool,
-    pub initial_zoom: i32,
-    pub initial_latitude: f64,
-    pub initial_longitude: f64,
-    pub locations_count: u32,
-    pub map_style: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CacheData {
-    timestamp: u64,
-    games: Vec<Game>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-struct MarkerSpriteEntry {
-    width: u32,
-    height: u32,
-    x: u32,
-    y: u32,
-    #[serde(rename = "pixelRatio")]
-    pixel_ratio: u32,
-}
-
-// Tile config structs — parsed from window.mapData.mapConfig in map page HTML
+// --- Tile config structs (parsed from window.mapData.mapConfig in map page HTML) ---
 
 #[derive(Debug, Deserialize)]
 struct MinMax {
@@ -159,26 +117,6 @@ struct MapConfig {
 struct MapDataHtml {
     #[serde(rename = "mapConfig")]
     map_config: MapConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TileMeta {
-    pub min_zoom: u32,
-    pub max_zoom: u32,
-    pub extension: String,
-    /// Full CDN URL with `{z}`/`{x}`/`{y}` placeholders, used by the tile protocol
-    /// handler to fetch-on-demand when a tile isn't cached on disk yet.
-    #[serde(default)]
-    pub url_template: String,
-}
-
-/// Progress emitted to the frontend during a full-game tile download.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TileProgress {
-    game_id: u32,
-    downloaded: u64,
-    total: u64,
 }
 
 // --- Helper Functions ---
