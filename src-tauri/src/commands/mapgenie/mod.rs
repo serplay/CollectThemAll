@@ -13,7 +13,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::http::{Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager};
@@ -36,26 +36,11 @@ use http::*;
 mod parsing;
 use parsing::*;
 
-/// In-memory cache of per-map tile metadata (zoom range, extension, CDN URL template)
-/// so the protocol handler doesn't re-read/parse tile_meta.json on every tile request.
-static TILE_META_CACHE: OnceLock<tokio::sync::Mutex<HashMap<(u32, u32), TileMeta>>> =
-    OnceLock::new();
+// On-disk + in-memory caches (games list and per-map tile metadata).
+mod cache;
+use cache::*;
 
 // --- Helper Functions ---
-
-async fn get_cached_game(app: &AppHandle, game_id: u32) -> Result<Game, String> {
-    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
-    let cache_file = cache_dir.join("mapgenie_games_cache.json");
-    let cache_content = fs::read_to_string(&cache_file)
-        .await
-        .map_err(|_| "Game cache not found — fetch the games list first".to_string())?;
-    let cache_data: CacheData = serde_json::from_str(&cache_content).map_err(|e| e.to_string())?;
-    cache_data
-        .games
-        .into_iter()
-        .find(|g| g.id == game_id)
-        .ok_or_else(|| format!("Game with id {} not found in cache", game_id))
-}
 
 async fn fetch_map_tile_config(
     client: &Client,
@@ -579,41 +564,6 @@ pub async fn ensure_tile_meta(
         .insert((game_id, map_id), meta.clone());
 
     Ok(meta)
-}
-
-fn meta_cache() -> &'static tokio::sync::Mutex<HashMap<(u32, u32), TileMeta>> {
-    TILE_META_CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
-}
-
-/// Loads tile metadata from the in-memory cache, falling back to tile_meta.json on disk.
-async fn load_tile_meta(app: &AppHandle, game_id: u32, map_id: u32) -> Option<TileMeta> {
-    {
-        let cache = meta_cache().lock().await;
-        if let Some(meta) = cache.get(&(game_id, map_id)) {
-            return Some(meta.clone());
-        }
-    }
-    let meta_path = app
-        .path()
-        .app_data_dir()
-        .ok()?
-        .join("assets")
-        .join(game_id.to_string())
-        .join("maps")
-        .join(map_id.to_string())
-        .join("tile_meta.json");
-    let content = fs::read_to_string(&meta_path).await.ok()?;
-    let meta: TileMeta = serde_json::from_str(&content).ok()?;
-    // Treat a missing url_template as a cache miss so ensure_tile_meta re-scrapes fresh data.
-    // Old tile_meta.json files written before this field was introduced have url_template = "".
-    if meta.url_template.is_empty() {
-        return None;
-    }
-    meta_cache()
-        .lock()
-        .await
-        .insert((game_id, map_id), meta.clone());
-    Some(meta)
 }
 
 /// Serves a tile for the `tile://` protocol: returns it from disk if cached, otherwise
