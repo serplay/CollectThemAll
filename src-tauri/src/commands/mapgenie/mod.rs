@@ -28,30 +28,20 @@ pub use models::*;
 mod tile_config;
 use tile_config::*;
 
-/// Max simultaneous tile downloads. Tiles are tiny so we can fan out fairly wide
-/// without overwhelming the CDN; this is the main lever for download speed.
-const TILE_DOWNLOAD_CONCURRENCY: usize = 16;
+// Network plumbing (HTTP client + single-file download helper).
+mod http;
+use http::*;
 
-/// Shared HTTP client for on-demand tile fetches by the protocol handler.
-static TILE_CLIENT: OnceLock<Client> = OnceLock::new();
+// Tiny string/URL helpers used while scraping pages.
+mod parsing;
+use parsing::*;
 
 /// In-memory cache of per-map tile metadata (zoom range, extension, CDN URL template)
 /// so the protocol handler doesn't re-read/parse tile_meta.json on every tile request.
 static TILE_META_CACHE: OnceLock<tokio::sync::Mutex<HashMap<(u32, u32), TileMeta>>> =
     OnceLock::new();
 
-fn tile_client() -> &'static Client {
-    TILE_CLIENT.get_or_init(|| build_client().expect("failed to build tile HTTP client"))
-}
-
 // --- Helper Functions ---
-
-fn build_client() -> Result<Client, String> {
-    Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()
-        .map_err(|e| e.to_string())
-}
 
 async fn get_cached_game(app: &AppHandle, game_id: u32) -> Result<Game, String> {
     let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
@@ -65,23 +55,6 @@ async fn get_cached_game(app: &AppHandle, game_id: u32) -> Result<Game, String> 
         .into_iter()
         .find(|g| g.id == game_id)
         .ok_or_else(|| format!("Game with id {} not found in cache", game_id))
-}
-
-/// Extracts the JSON value of a named JavaScript variable from raw HTML.
-/// Handles both `window.VAR = {...}` and `const VAR = {...}` patterns.
-/// Uses serde_json's streaming deserializer so it reads exactly one valid JSON
-/// value and stops, safely ignoring the trailing semicolon/script content.
-fn extract_named_var_json(html: &str, prefix: &str) -> Result<serde_json::Value, String> {
-    let start = html
-        .find(prefix)
-        .ok_or_else(|| format!("'{}' not found in page", prefix.trim()))?
-        + prefix.len();
-    let slice = &html[start..];
-    serde_json::Deserializer::from_str(slice)
-        .into_iter::<serde_json::Value>()
-        .next()
-        .ok_or_else(|| "Failed to parse JSON after variable prefix".to_string())?
-        .map_err(|e| e.to_string())
 }
 
 async fn fetch_map_tile_config(
@@ -756,54 +729,4 @@ fn slice_marker_sprites(
     }
 
     Ok(())
-}
-
-async fn download_file(client: &Client, url: &str, path: PathBuf) -> Result<(), String> {
-    if fs::try_exists(&path).await.unwrap_or(false) {
-        return Ok(());
-    }
-    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {} for {}", resp.status(), url));
-    }
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-    fs::write(&path, bytes).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn sibling_markers_json_url(sprite_url: &str) -> Result<String, String> {
-    // Strip query string first
-    let url_no_query = sprite_url.split('?').next().unwrap_or(sprite_url);
-    // Strip @2x/@1x density suffix if present
-    let url_clean = strip_density_suffix(url_no_query);
-    let last_slash = url_clean
-        .rfind('/')
-        .ok_or_else(|| format!("Unexpected marker sprite URL format: {}", sprite_url))?;
-    Ok(format!("{}/markers.json", &url_clean[..last_slash]))
-}
-
-fn normalize_url(url: &str, default_host: &str) -> String {
-    if url.starts_with("//") {
-        format!("https:{}", url)
-    } else if url.starts_with('/') {
-        format!("https://{}{}", default_host, url)
-    } else {
-        url.to_string()
-    }
-}
-
-fn strip_density_suffix(url: &str) -> String {
-    if let Some(at_pos) = url.rfind('@') {
-        if let Some(dot_pos) = url[at_pos..].find('.') {
-            let after_at = &url[at_pos + 1..at_pos + dot_pos];
-            if after_at.ends_with('x')
-                && after_at[..after_at.len() - 1]
-                    .chars()
-                    .all(|c| c.is_ascii_digit())
-            {
-                return format!("{}{}", &url[..at_pos], &url[at_pos + dot_pos..]);
-            }
-        }
-    }
-    url.to_string()
 }
