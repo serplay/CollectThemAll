@@ -68,7 +68,7 @@ Thousands of markers rendered smoothly, with category filters and live completio
   <img src="./static/full_map_view.png" alt="Full map view" width="80%">
 </p>
 
-<table>
+<table align="center">
   <tr>
     <td width="50%"><img src="./static/details.png" alt="Marker details popup" width="100%"></td>
     <td width="50%"><img src="./static/progress.png" alt="Per-category progress" width="100%"></td>
