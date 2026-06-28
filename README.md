@@ -133,19 +133,49 @@ Optimized installers/executables are written to `src-tauri/target/release/bundle
 
 ```text
 CollectThemAll/
-├── src/                       # Svelte 5 frontend
-│   ├── components/            # GameLibrary, GameMapView, SearchBar, Background
+├── src/                          # Svelte 5 frontend
+│   ├── components/               # UI components, each kept small and focused
+│   │   ├── GameLibrary.svelte    # game grid + download-on-click
+│   │   ├── GameMapView.svelte    # the map; orchestrates the sidebar pieces below
+│   │   ├── MapSwitcher.svelte    # ├─ map list (presentational)
+│   │   ├── ProgressPanel.svelte  # ├─ progress box (presentational)
+│   │   ├── CategoryFilters.svelte# └─ filter checkboxes (presentational)
+│   │   ├── SearchBar.svelte / Background.svelte
 │   ├── lib/
-│   │   ├── api/mapgenie.ts    # Tauri command bindings
-│   │   ├── stores/            # found-marker persistence (localStorage)
-│   │   └── types/             # shared TypeScript types
-│   └── routes/               # SvelteKit routes (library, game/[id], overlay)
-└── src-tauri/                # Rust backend
+│   │   ├── api/                  # Tauri command bindings, split by topic
+│   │   │   ├── games.ts          # games list
+│   │   │   ├── assets.ts         # images / location data on disk
+│   │   │   ├── tiles.ts          # tile download + metadata
+│   │   │   └── mapgenie.ts       # barrel re-export (back-compat)
+│   │   ├── map/                  # pure map helpers extracted from GameMapView
+│   │   │   ├── markdown.ts       # tiny markdown->HTML (with XSS caution)
+│   │   │   ├── geojson.ts        # locations -> GeoJSON
+│   │   │   ├── tileUrl.ts        # platform-correct tile:// URL template
+│   │   │   └── popup.ts          # marker popup DOM builder
+│   │   ├── stores/               # found-marker persistence (localStorage)
+│   │   └── types/                # shared TypeScript types (game.ts + barrel)
+│   └── routes/                   # SvelteKit routes (library, game/[id], overlay)
+└── src-tauri/                    # Rust backend
     ├── src/
-    │   ├── lib.rs            # window mgmt, global shortcut, tile:// protocol
-    │   └── commands/         # asset fetching, tile download/caching
-    └── tauri.conf.json       # Tauri configuration
+    │   ├── lib.rs                # window mgmt, global shortcut, tile:// protocol
+    │   └── commands/
+    │       └── mapgenie/         # one concern per file:
+    │           ├── mod.rs        #   module wiring + the #[tauri::command]s
+    │           ├── models.rs     #   data structs
+    │           ├── tile_config.rs#   scraped tile config + custom deserializer
+    │           ├── http.rs       #   HTTP client + file download
+    │           ├── parsing.rs    #   URL/HTML string helpers
+    │           ├── cache.rs      #   on-disk + in-memory caches
+    │           ├── sprites.rs    #   marker sprite-sheet slicing
+    │           └── scraping.rs   #   fetch + extract map page config
+    └── tauri.conf.json           # Tauri configuration
 ```
+
+> ℹ️ **A note on the layout.** Both the frontend and the Rust backend are organised
+> as many small, single-purpose files rather than a couple of large ones. This makes
+> the code easier to read and to audit — you can find the one place a thing happens
+> (e.g. *all* network calls live in `http.rs`/`scraping.rs`, and the only doors the UI
+> can open into the backend are the `#[tauri::command]`s in `mapgenie/mod.rs`).
 
 ## Roadmap
 
