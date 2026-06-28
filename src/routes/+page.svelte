@@ -1,4 +1,8 @@
 <script lang="ts">
+  // The home page ("/"). It is deliberately tiny: it just stacks the decorative
+  // Background behind the GameLibrary. All the real work lives inside those
+  // components — composing small pieces like this is the modular style we are
+  // aiming for across the whole project.
   import Background from '../components/Background.svelte';
   import GameLibrary from '../components/GameLibrary.svelte';
 </script>

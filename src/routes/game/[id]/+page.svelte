@@ -12,6 +12,9 @@
   let loadError = $state<string | null>(null);
 
   onMount(async () => {
+    // The id comes from the URL (`/game/123`), so it is untrusted user input. We
+    // immediately convert it to a Number and, just below, only proceed if we can
+    // actually find a matching game — never assuming the URL points at something real.
     const gameId = Number($page.params.id);
     try {
       const games = await fetchGames(); // served from 12hr cache, not a re-fetch of the list
