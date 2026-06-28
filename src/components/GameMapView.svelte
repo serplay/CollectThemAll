@@ -10,6 +10,10 @@
   import { buildLocationGeoJson } from '../lib/map/geojson';
   import { buildTileUrlTemplate } from '../lib/map/tileUrl';
   import { buildMarkerPopupElement } from '../lib/map/popup';
+  // Sidebar pieces split into their own presentational components.
+  import MapSwitcher from './MapSwitcher.svelte';
+  import ProgressPanel from './ProgressPanel.svelte';
+  import CategoryFilters from './CategoryFilters.svelte';
 
   // Identifies this window so we ignore our own broadcasts (we already updated locally).
   let windowLabel = '';
@@ -388,67 +392,29 @@
     {/if}
     <h2 class="game-title">{game.title}</h2>
 
-    <div class="map-switcher">
-      {#each game.maps as map (map.id)}
-        <button
-          class="map-link"
-          class:selected={activeMap?.id === map.id}
-          onclick={() => loadMap(map)}
-        >
-          {map.title}
-        </button>
-      {/each}
-    </div>
+    <MapSwitcher maps={game.maps} activeMapId={activeMap?.id} onSelect={loadMap} />
 
     <hr />
 
     <!-- Progress overview -->
-    <div class="progress-section">
-      <div class="progress-header">
-        <h3>Progress</h3>
-        <span class="progress-count">{foundIds.size} / {totalLocations}</span>
-      </div>
-      <div class="progress-bar-track">
-        <div
-          class="progress-bar-fill"
-          style="width: {totalLocations > 0 ? (foundIds.size / totalLocations) * 100 : 0}%"
-        ></div>
-      </div>
-      <div class="progress-actions">
-        <label class="hide-found-toggle">
-          <input type="checkbox" checked={hideFound} onchange={toggleHideFound} />
-          <span>Hide found</span>
-        </label>
-        {#if foundIds.size > 0}
-          <button class="clear-btn" onclick={handleClearAll}>Reset all</button>
-        {/if}
-      </div>
-    </div>
+    <ProgressPanel
+      foundCount={foundIds.size}
+      {totalLocations}
+      {hideFound}
+      onToggleHideFound={toggleHideFound}
+      onClearAll={handleClearAll}
+    />
 
     <hr />
 
-    <div class="filters">
-      <h3>Filters</h3>
-      {#if categories.length === 0 && !isLoadingMap}
-        <p class="no-categories">No categories found.</p>
-      {/if}
-      {#each categories as cat (cat.id)}
-        <label class="filter-item">
-          <input
-            type="checkbox"
-            checked={visibleCategoryIds.has(cat.id)}
-            onchange={() => toggleCategory(cat.id)}
-          />
-          {#if cat.iconUrl}
-            <img src={cat.iconUrl} alt="" class="filter-icon" />
-          {/if}
-          <span class="filter-label">{cat.label}</span>
-          <span class="filter-progress">
-            {foundInCategory(cat.id)}/{categoryLocationCounts.get(cat.id) ?? 0}
-          </span>
-        </label>
-      {/each}
-    </div>
+    <CategoryFilters
+      {categories}
+      {visibleCategoryIds}
+      {categoryLocationCounts}
+      {foundInCategory}
+      {isLoadingMap}
+      onToggleCategory={toggleCategory}
+    />
   </aside>
 
   <main class="map-area" bind:this={mapContainer}>
@@ -499,151 +465,13 @@
     margin-bottom: 1rem;
   }
 
-  .map-switcher {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .map-link {
-    background: transparent;
-    border: 1px solid #3d3a4f;
-    border-radius: 6px;
-    color: #f6f6f6;
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-    cursor: pointer;
-    font-size: 0.9rem;
-    transition: background 0.15s;
-  }
-
-  .map-link:hover {
-    background: #2a2540;
-  }
-
-  .map-link.selected {
-    background: #cf30aa;
-    border-color: #cf30aa;
-  }
+  /* The map list, progress box and category filters now live in their own
+     components (MapSwitcher / ProgressPanel / CategoryFilters), each carrying its
+     own scoped styles. */
 
   hr {
     border-color: #3d3a4f;
     margin: 1.25rem 0;
-  }
-
-  .filters h3 {
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    color: #c0b9c0;
-    margin-bottom: 0.6rem;
-  }
-
-  .filter-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0;
-    font-size: 0.9rem;
-    cursor: pointer;
-  }
-
-  .filter-icon {
-    width: 20px;
-    height: 20px;
-    object-fit: contain;
-    flex-shrink: 0;
-  }
-
-  .filter-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .filter-progress {
-    font-size: 0.75rem;
-    color: #a78bfa;
-    flex-shrink: 0;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .no-categories {
-    font-size: 0.85rem;
-    color: #c0b9c0;
-  }
-
-  /* ── Progress section ── */
-  .progress-section {
-    margin-bottom: 0.25rem;
-  }
-
-  .progress-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-  }
-
-  .progress-header h3 {
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    color: #c0b9c0;
-    margin: 0;
-  }
-
-  .progress-count {
-    font-size: 0.85rem;
-    color: #a78bfa;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .progress-bar-track {
-    height: 6px;
-    background: #2a2540;
-    border-radius: 3px;
-    overflow: hidden;
-    margin-bottom: 0.6rem;
-  }
-
-  .progress-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #a78bfa, #cf30aa);
-    border-radius: 3px;
-    transition: width 0.3s ease;
-    min-width: 0;
-  }
-
-  .progress-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-
-  .hide-found-toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.8rem;
-    color: #c0b9c0;
-    cursor: pointer;
-  }
-
-  .clear-btn {
-    background: transparent;
-    border: 1px solid #5b3a50;
-    border-radius: 4px;
-    color: #f87171;
-    font-size: 0.75rem;
-    padding: 0.2rem 0.5rem;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .clear-btn:hover {
-    background: #3b1a30;
   }
 
   .map-area {
