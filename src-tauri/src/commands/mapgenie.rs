@@ -97,12 +97,56 @@ struct TileSetBounds {
     y: MinMax,
 }
 
+/// Deserializes tile bounds, which MapGenie encodes inconsistently across games:
+///   - an object keyed by zoom-level string (e.g. {"3": {x,y}, ...}) — most games
+///   - an array indexed by zoom level (e.g. [{x,y}, {x,y}, ...]) — e.g. Far Cry New Dawn
+///   - null — maps with no per-zoom bounds
+/// All forms are normalized to a HashMap keyed by zoom-level string. Array indices become
+/// the zoom keys. The visitor MUST fully drain a sequence, or serde_json errors with
+/// "invalid length N, expected fewer elements in array".
+fn deserialize_tile_bounds<'de, D>(d: D) -> Result<HashMap<String, TileSetBounds>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{MapAccess, SeqAccess, Visitor};
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = HashMap<String, TileSetBounds>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a map, null, or sequence")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
+            let mut map = HashMap::new();
+            while let Some((k, v)) = a.next_entry::<String, TileSetBounds>()? {
+                map.insert(k, v);
+            }
+            Ok(map)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(HashMap::new()) }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(HashMap::new()) }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
+            // Array form: index = zoom level. Drain fully and key by index.
+            let mut map = HashMap::new();
+            let mut idx = 0usize;
+            while let Some(v) = a.next_element::<Option<TileSetBounds>>()? {
+                if let Some(b) = v {
+                    map.insert(idx.to_string(), b);
+                }
+                idx += 1;
+            }
+            Ok(map)
+        }
+    }
+    d.deserialize_any(V)
+}
+
 #[derive(Debug, Deserialize)]
 struct TileSet {
     pattern: String,
     extension: String,
     min_zoom: u32,
     max_zoom: u32,
+    #[serde(deserialize_with = "deserialize_tile_bounds")]
     bounds: HashMap<String, TileSetBounds>,
 }
 
@@ -700,12 +744,15 @@ async fn load_tile_meta(app: &AppHandle, game_id: u32, map_id: u32) -> Option<Ti
         .join("tile_meta.json");
     let content = fs::read_to_string(&meta_path).await.ok()?;
     let meta: TileMeta = serde_json::from_str(&content).ok()?;
-    if !meta.url_template.is_empty() {
-        meta_cache()
-            .lock()
-            .await
-            .insert((game_id, map_id), meta.clone());
+    // Treat a missing url_template as a cache miss so ensure_tile_meta re-scrapes fresh data.
+    // Old tile_meta.json files written before this field was introduced have url_template = "".
+    if meta.url_template.is_empty() {
+        return None;
     }
+    meta_cache()
+        .lock()
+        .await
+        .insert((game_id, map_id), meta.clone());
     Some(meta)
 }
 
