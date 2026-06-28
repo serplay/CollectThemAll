@@ -10,6 +10,12 @@ export async function downloadGameAssets(gameId: number): Promise<void> {
   return invoke('download_game_assets', { gameId });
 }
 
+/** Whether a game's offline assets are already fully downloaded (lets the UI skip the
+ *  "Downloading map assets" screen on repeat opens). */
+export async function gameAssetsReady(gameId: number): Promise<boolean> {
+  return invoke<boolean>('game_assets_ready', { gameId });
+}
+
 export async function getLocalImageAssetUrl(gameId: number, filename: string): Promise<string> {
   const path = await invoke<string>('get_game_asset_path', { gameId, filename });
   if (!(await exists(path))) throw new Error('Asset not cached yet');

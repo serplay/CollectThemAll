@@ -332,6 +332,15 @@ pub async fn download_game_assets(app: AppHandle, game_id: u32) -> Result<(), St
     let maps_dir = game_dir.join("maps");
     let markers_dir = game_dir.join("markers");
 
+    // Skip everything if a previous run finished successfully. Without this, every map open
+    // re-scrapes the marker page and re-slices icons, which is slow and shows a needless
+    // "Downloading map assets" screen each time. The marker is only written on full success,
+    // so an interrupted/partial download will correctly re-run.
+    let complete_marker = game_dir.join(".assets_complete");
+    if fs::try_exists(&complete_marker).await.unwrap_or(false) {
+        return Ok(());
+    }
+
     fs::create_dir_all(&maps_dir)
         .await
         .map_err(|e| e.to_string())?;
@@ -416,7 +425,22 @@ pub async fn download_game_assets(app: AppHandle, game_id: u32) -> Result<(), St
         .map_err(|e| e.to_string())??;
     }
 
+    // Mark the download complete so subsequent opens skip all of the above.
+    let _ = fs::write(&complete_marker, b"1").await;
+
     Ok(())
+}
+
+/// Returns whether a game's offline assets have already been fully downloaded, so the UI can
+/// skip the "Downloading map assets" screen and open the map immediately.
+#[tauri::command]
+pub async fn game_assets_ready(app: AppHandle, game_id: u32) -> Result<bool, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let marker = data_dir
+        .join("assets")
+        .join(game_id.to_string())
+        .join(".assets_complete");
+    Ok(fs::try_exists(&marker).await.unwrap_or(false))
 }
 
 /// Downloads all map tiles for a specific map at all zoom levels defined in the

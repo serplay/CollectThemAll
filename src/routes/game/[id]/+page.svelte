@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
-  import { fetchGames, downloadGameAssets } from '../../../lib/api/mapgenie';
+  import { fetchGames, downloadGameAssets, gameAssetsReady } from '../../../lib/api/mapgenie';
   import type { Game } from '../../../lib/types/mapgenie';
   import GameMapView from '../../../components/GameMapView.svelte';
   import Background from '../../../components/Background.svelte';
@@ -23,9 +23,15 @@
       }
 
       isLoading = false;
-      isDownloading = true;
-      await downloadGameAssets(game.id); // creates assets/{id}/... if missing, no-ops files that already exist
-      isDownloading = false;
+
+      // Only show the downloading screen the first time; afterwards assets are cached and
+      // download_game_assets returns immediately, so open the map without the flash.
+      const ready = await gameAssetsReady(game.id);
+      if (!ready) {
+        isDownloading = true;
+        await downloadGameAssets(game.id); // creates assets/{id}/... on first open
+        isDownloading = false;
+      }
     } catch (err) {
       console.error('Failed to load/download game assets:', err);
       loadError = 'Failed to download game assets.';
