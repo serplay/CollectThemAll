@@ -1,4 +1,10 @@
 <script lang="ts">
+  // A styled text box for searching the game library.
+  //
+  // `$bindable('')` is the interesting bit: it lets the PARENT component two-way
+  // bind to this `value` (via `bind:value`). So whatever the user types here flows
+  // straight back up to the parent's search query. All the rest of this file is
+  // just CSS for the fancy animated glow border — no logic, no data leaves the app.
   let { value = $bindable('') } = $props();
 </script>
 

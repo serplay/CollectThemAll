@@ -28,6 +28,10 @@
   });
 
   async function handleGameClick(game: Game) {
+    // Guard clause: if a download is already running, ignore further clicks. This
+    // stops the user from kicking off several downloads at once by clicking around
+    // — a simple example of validating state before acting, not just trusting the
+    // UI to be in a sensible state.
     if (downloadingId !== null) return;
     downloadingId = game.id;
     downloadError = null;
