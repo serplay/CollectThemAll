@@ -59,3 +59,35 @@ jobs:
 
       - name: Build (debug)
         run: npm run tauri build -- --debug
+
+  # cargo check (no signing) verifies the Rust iOS target compiles cleanly.
+  # A full tauri ios build requires a provisioning profile and dev team ID
+  # which are not in CI — cargo check gives us most of the value cheaply.
+  ios-check:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust with iOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check iOS target (no signing)
+        run: cargo check --target aarch64-apple-ios
+        working-directory: src-tauri
