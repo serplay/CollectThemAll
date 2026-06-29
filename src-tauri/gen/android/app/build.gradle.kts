@@ -24,6 +24,23 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        // key.properties lives in the Gradle project root (src-tauri/gen/android/),
+        // git-excluded. In CI it is written from encrypted secrets before the build
+        // so the APK comes out properly signed. Without it, Gradle skips the signing
+        // config and produces an unsigned APK — installable via adb for testing, but
+        // not upgradeable over a signed install and rejected by the Play Store.
+        val keyPropsFile = rootProject.file("key.properties")
+        if (keyPropsFile.exists()) {
+            val keyProps = Properties().apply { keyPropsFile.inputStream().use { load(it) } }
+            create("release") {
+                storeFile = rootProject.file(keyProps.getProperty("storeFile"))
+                storePassword = keyProps.getProperty("storePassword")
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -37,6 +54,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
