@@ -74,6 +74,26 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'CollectThemAll ${{ github.ref_name }}'
           releaseBody: 'See the assets below to download and install this version.'
+          # Keep the release a DRAFT while the build matrix runs so users never see
+          # it with only some platforms' installers. The publish job below flips it
+          # to a published, "latest" release once every platform has uploaded.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  # Once all platform builds have uploaded their installers to the draft release,
+  # publish it (non-draft) and mark it as the latest release.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release as latest (non-draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false \
+            --latest
