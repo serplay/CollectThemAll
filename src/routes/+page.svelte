@@ -28,6 +28,14 @@
     padding: 0;
     min-height: 100%;
     width: 100%;
+  }
+
+  /* Clip horizontal overflow on the ROOT element only. On the root, overflow is
+     propagated to the viewport, so it stays the scroll root and position:sticky
+     keeps working. Putting overflow-x:hidden on <body> instead would turn body
+     into its own scroll container — sticky children then anchor to body's
+     scrollport (which never scrolls) and silently behave like position:static. */
+  :global(html) {
     overflow-x: hidden;
   }
 

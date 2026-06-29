@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { listen } from '@tauri-apps/api/event';
   import { fetchGames, downloadGameAssets } from '../../lib/api/mapgenie';
   import type { Game } from '../../lib/types/mapgenie';
   import GameMapView from '../../components/GameMapView.svelte';
+  import { isTauriMobile } from '$lib/platform';
 
   // This is the always-on-top overlay window shown with Ctrl+Alt+`. It mirrors
   // whatever map the main window last opened. The two windows are separate WebViews
@@ -90,6 +92,12 @@
   let unlisten: (() => void) | null = null;
 
   onMount(() => {
+    // The overlay is a desktop-only feature — the layout's isOverlayWindow check
+    // prevents routing here on mobile, but guard defensively in case of direct navigation.
+    if (isTauriMobile) {
+      goto('/');
+      return;
+    }
     window.addEventListener('keydown', onKey);
     window.addEventListener('storage', onStorage);
     window.addEventListener('focus', onFocus);

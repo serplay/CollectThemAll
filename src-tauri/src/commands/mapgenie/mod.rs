@@ -77,21 +77,9 @@ pub async fn fetch_and_cache_games(app: AppHandle) -> Result<Vec<Game>, String> 
 
     let games: Vec<Game> = response.json().await.map_err(|e| e.to_string())?;
 
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let assets_dir = data_dir.join("assets");
-
-    for game in &games {
-        let game_dir = assets_dir.join(game.id.to_string());
-        let _ = fs::create_dir_all(&game_dir).await;
-
-        if let Some(img_url) = &game.image {
-            let _ = download_file(&client, img_url, game_dir.join("image.jpg")).await;
-        }
-        if let Some(logo_url) = &game.logo {
-            let _ = download_file(&client, logo_url, game_dir.join("logo.jpg")).await;
-        }
-    }
-
+    // Write the games list to disk before touching the network again. Even if the
+    // background logo task never completes (process killed, no connectivity) the
+    // list is preserved and the 12h cache path works on the next launch.
     let cache_data = CacheData {
         timestamp: now,
         games: games.clone(),
@@ -100,6 +88,30 @@ pub async fn fetch_and_cache_games(app: AppHandle) -> Result<Vec<Game>, String> 
         let _ = fs::create_dir_all(&cache_dir).await;
         let _ = fs::write(&cache_file, cache_json).await;
     }
+
+    // Download cover art in the background so the game list is returned immediately.
+    // The frontend already has a CDN fallback (`game.logo` URL) for logos that haven't
+    // been cached yet — sequential logo downloads don't need to block the invoke response.
+    let app_bg = app.clone();
+    let games_bg = games.clone();
+    tauri::async_runtime::spawn(async move {
+        let data_dir = match app_bg.path().app_data_dir() {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let assets_dir = data_dir.join("assets");
+        let Ok(client) = build_client() else { return };
+        for game in &games_bg {
+            let game_dir = assets_dir.join(game.id.to_string());
+            let _ = fs::create_dir_all(&game_dir).await;
+            if let Some(img_url) = &game.image {
+                let _ = download_file(&client, img_url, game_dir.join("image.jpg")).await;
+            }
+            if let Some(logo_url) = &game.logo {
+                let _ = download_file(&client, logo_url, game_dir.join("logo.jpg")).await;
+            }
+        }
+    });
 
     Ok(games)
 }
