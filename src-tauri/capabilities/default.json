@@ -1,16 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main app windows",
-  "windows": ["main", "overlay"],
+  "description": "Capabilities shared across all platforms — fs access the map and asset pipeline need",
+  "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:window:allow-hide",
-    "core:window:allow-show",
-    "core:window:allow-set-focus",
-    "core:window:allow-is-visible",
-    "core:window:allow-start-dragging",
-    "core:window:allow-close",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "$APPDATA/assets/**" }]
