@@ -6,6 +6,11 @@
   import type { Game } from '../../lib/types/mapgenie';
   import GameMapView from '../../components/GameMapView.svelte';
 
+  // This is the always-on-top overlay window shown with Ctrl+Alt+`. It mirrors
+  // whatever map the main window last opened. The two windows are separate WebViews
+  // that cannot share live memory, so they coordinate through small messages
+  // (Tauri events + the storage event) rather than by reaching into each other —
+  // a clean trust boundary between the two windows.
   let game = $state<Game | null>(null);
   let mapId = $state<number | undefined>(undefined);
   let status = $state<string>('Loading overlay…');

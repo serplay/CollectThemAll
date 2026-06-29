@@ -4,6 +4,14 @@
  * Data is stored in localStorage keyed by `found:{gameId}:{mapId}` so each
  * game+map combo gets its own independent set. The store is intentionally
  * frontend-only — no Tauri backend commands needed.
+ *
+ * Cybersecurity studies note: localStorage is plain, unencrypted text that any
+ * script running on this page can read. That is totally fine here because the
+ * only thing we keep is "which in-game collectibles has the player ticked off" —
+ * not exactly secret data. The lesson from class still stands though: never put
+ * passwords, tokens or anything sensitive in localStorage. Also notice we wrap
+ * every read in try/catch, because parsing data that came from storage can fail
+ * (corrupted/edited value) and we would rather return an empty set than crash.
  */
 
 function storageKey(gameId: number, mapId: number): string {

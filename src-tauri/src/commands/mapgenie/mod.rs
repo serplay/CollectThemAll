@@ -9,11 +9,9 @@
 //! For now this file (`mod.rs`) is still the main entry point; we move things out
 //! into sibling modules one step at a time.
 
-use reqwest::Client;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::http::{Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager};
@@ -36,52 +34,17 @@ use http::*;
 mod parsing;
 use parsing::*;
 
-/// In-memory cache of per-map tile metadata (zoom range, extension, CDN URL template)
-/// so the protocol handler doesn't re-read/parse tile_meta.json on every tile request.
-static TILE_META_CACHE: OnceLock<tokio::sync::Mutex<HashMap<(u32, u32), TileMeta>>> =
-    OnceLock::new();
+// On-disk + in-memory caches (games list and per-map tile metadata).
+mod cache;
+use cache::*;
 
-// --- Helper Functions ---
+// Slicing the marker sprite sheet into individual icons.
+mod sprites;
+use sprites::*;
 
-async fn get_cached_game(app: &AppHandle, game_id: u32) -> Result<Game, String> {
-    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
-    let cache_file = cache_dir.join("mapgenie_games_cache.json");
-    let cache_content = fs::read_to_string(&cache_file)
-        .await
-        .map_err(|_| "Game cache not found — fetch the games list first".to_string())?;
-    let cache_data: CacheData = serde_json::from_str(&cache_content).map_err(|e| e.to_string())?;
-    cache_data
-        .games
-        .into_iter()
-        .find(|g| g.id == game_id)
-        .ok_or_else(|| format!("Game with id {} not found in cache", game_id))
-}
-
-async fn fetch_map_tile_config(
-    client: &Client,
-    game_slug: &str,
-    map_slug: &str,
-) -> Result<(MapConfig, serde_json::Value), String> {
-    let url = format!("https://mapgenie.io/{}/maps/{}", game_slug, map_slug);
-    let html = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let map_data_json = extract_named_var_json(&html, "window.mapData = ")?;
-    let parsed: MapDataHtml =
-        serde_json::from_value(map_data_json.clone()).map_err(|e| e.to_string())?;
-
-    // Also return the raw mapData JSON so callers can extract other fields (e.g. MARKER_SPRITE_POSITIONS_V3)
-    let marker_positions = extract_named_var_json(&html, "const MARKER_SPRITE_POSITIONS_V3 = ")
-        .unwrap_or(serde_json::Value::Null);
-
-    Ok((parsed.map_config, marker_positions))
-}
+// Fetching map pages and extracting their config (web scraping).
+mod scraping;
+use scraping::*;
 
 // --- Commands ---
 
@@ -581,41 +544,6 @@ pub async fn ensure_tile_meta(
     Ok(meta)
 }
 
-fn meta_cache() -> &'static tokio::sync::Mutex<HashMap<(u32, u32), TileMeta>> {
-    TILE_META_CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
-}
-
-/// Loads tile metadata from the in-memory cache, falling back to tile_meta.json on disk.
-async fn load_tile_meta(app: &AppHandle, game_id: u32, map_id: u32) -> Option<TileMeta> {
-    {
-        let cache = meta_cache().lock().await;
-        if let Some(meta) = cache.get(&(game_id, map_id)) {
-            return Some(meta.clone());
-        }
-    }
-    let meta_path = app
-        .path()
-        .app_data_dir()
-        .ok()?
-        .join("assets")
-        .join(game_id.to_string())
-        .join("maps")
-        .join(map_id.to_string())
-        .join("tile_meta.json");
-    let content = fs::read_to_string(&meta_path).await.ok()?;
-    let meta: TileMeta = serde_json::from_str(&content).ok()?;
-    // Treat a missing url_template as a cache miss so ensure_tile_meta re-scrapes fresh data.
-    // Old tile_meta.json files written before this field was introduced have url_template = "".
-    if meta.url_template.is_empty() {
-        return None;
-    }
-    meta_cache()
-        .lock()
-        .await
-        .insert((game_id, map_id), meta.clone());
-    Some(meta)
-}
-
 /// Serves a tile for the `tile://` protocol: returns it from disk if cached, otherwise
 /// fetches it from the CDN on the fly, caches it to disk, and returns the bytes. This is
 /// what lets the map open instantly and sharpen as tiles stream in. Every response carries
@@ -702,31 +630,4 @@ pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>
     let _ = fs::write(&tile_path, &bytes).await;
 
     ok_response(bytes)
-}
-
-// --- Private helpers ---
-
-/// Crops each named region out of the sprite sheet and saves it as its own PNG.
-fn slice_marker_sprites(
-    sprite_path: &PathBuf,
-    out_dir: &PathBuf,
-    markers: &HashMap<String, MarkerSpriteEntry>,
-) -> Result<(), String> {
-    let sheet = image::open(sprite_path).map_err(|e| e.to_string())?;
-    let (sheet_w, sheet_h) = (sheet.width(), sheet.height());
-
-    for (name, entry) in markers {
-        if entry.width == 0 || entry.height == 0 {
-            continue;
-        }
-        if entry.x + entry.width > sheet_w || entry.y + entry.height > sheet_h {
-            continue;
-        }
-
-        let cropped = sheet.crop_imm(entry.x, entry.y, entry.width, entry.height);
-        let out_path = out_dir.join(format!("{}.png", name));
-        cropped.save(&out_path).map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
 }

@@ -1,3 +1,12 @@
+//! Library crate: builds and runs the Tauri desktop application.
+//!
+//! Cybersecurity studies note: this file is where we wire up the trust boundary
+//! between the web UI and the native backend. Two things here are worth a
+//! security reviewer's attention: (1) the `invoke_handler` allow-list at the
+//! bottom, which is the *only* set of Rust functions the frontend may call, and
+//! (2) the custom `tile://` protocol handler, which serves bytes to the webview
+//! and therefore must be careful about which paths/URLs it will fetch.
+
 mod commands;
 
 /// Shows the in-game overlay if it's hidden, hides it if it's visible, creating the

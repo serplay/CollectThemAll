@@ -2,6 +2,11 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
 
+  // The root layout wraps every page. Its one special job: figure out whether we
+  // are the normal main window or the floating "overlay" window, because both load
+  // the exact same index.html. We tell them apart by the window's label, which Tauri
+  // sets natively (so the frontend can read it but cannot fake another window's
+  // identity — the label is assigned on the trusted side).
   let { children } = $props();
 
   // The overlay window loads the SPA entry (index.html); detect it by window label and

@@ -1,3 +1,11 @@
+<!--
+  Purely decorative full-screen grid background.
+
+  Note for a new reader: there is no <script> here at all — this component is just
+  one <div> plus CSS. `pointer-events: none` means clicks pass straight through it,
+  and `z-index: -1` keeps it behind everything else, so it can never get in the way
+  of the real UI. A good reminder that not every component needs logic.
+-->
 <div class="grid-bg"></div>
 
 <style>

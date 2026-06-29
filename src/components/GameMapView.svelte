@@ -6,6 +6,14 @@
   import { getMapData, getMarkerIconUrl, ensureTileMeta } from '../lib/api/mapgenie';
   import type { Game, Map as GameMap } from '../lib/types/mapgenie';
   import { loadFoundIds, toggleFound, clearFound, setFoundIds } from '../lib/stores/foundMarkers';
+  // Small, focused helpers extracted from this component for the modularity assignment.
+  import { buildLocationGeoJson } from '../lib/map/geojson';
+  import { buildTileUrlTemplate } from '../lib/map/tileUrl';
+  import { buildMarkerPopupElement } from '../lib/map/popup';
+  // Sidebar pieces split into their own presentational components.
+  import MapSwitcher from './MapSwitcher.svelte';
+  import ProgressPanel from './ProgressPanel.svelte';
+  import CategoryFilters from './CategoryFilters.svelte';
 
   // Identifies this window so we ignore our own broadcasts (we already updated locally).
   let windowLabel = '';
@@ -44,13 +52,6 @@
   let categoryLocationCounts = $state<Map<number, number>>(new Map());
   // Our own reference to the GeoJSON data so we can update it reliably
   let geoJsonData: { type: 'FeatureCollection'; features: any[] } = { type: 'FeatureCollection', features: [] };
-
-  function simpleMarkdownToHtml(text: string): string {
-    return text
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/\n/g, '<br>');
-  }
 
   async function loadMap(map: GameMap) {
     isLoadingMap = true;
@@ -133,15 +134,8 @@
     categories = catList;
     visibleCategoryIds = new Set(catList.map((c) => c.id));
 
-    // Tauri exposes custom URI schemes differently per platform: on Windows/Android the
-    // scheme is mapped to http://<scheme>.localhost (WebView2 doesn't support raw custom
-    // schemes via fetch), elsewhere it's <scheme>://localhost. MapLibre fetches tiles from
-    // a WebWorker using fetch(), which only accepts standard schemes, so we must use the
-    // platform-correct form rather than a hardcoded "tile://".
-    const tileBase = navigator.userAgent.includes('Windows')
-      ? 'http://tile.localhost'
-      : 'tile://localhost';
-    const tileUrlTemplate = `${tileBase}/${game.id}/${map.id}/{z}/{x}/{y}`;
+    // Platform-correct tile URL template (see lib/map/tileUrl.ts for the why).
+    const tileUrlTemplate = buildTileUrlTemplate(game.id, map.id);
 
     mapInstance = new maplibregl.Map({
       container: mapContainer,
@@ -184,29 +178,8 @@
         }
       }
 
-      // Build GeoJSON features from all locations, including found state
-      geoJsonData = {
-        type: 'FeatureCollection',
-        features: locations
-          .filter((loc: any) => loc.latitude && loc.longitude)
-          .map((loc: any) => {
-            return {
-              type: 'Feature' as const,
-              geometry: {
-                type: 'Point' as const,
-                coordinates: [parseFloat(loc.longitude), parseFloat(loc.latitude)],
-              },
-              properties: {
-                id: loc.id,
-                title: loc.title,
-                category_id: loc.category_id,
-                description: loc.description ?? '',
-                media: JSON.stringify(loc.media ?? []),
-                found: foundIds.has(loc.id) ? 1 : 0,
-              },
-            };
-          }),
-      };
+      // Build GeoJSON features from all locations, including found state.
+      geoJsonData = buildLocationGeoJson(locations, foundIds);
 
       mapInstance.addSource('locations', {
         type: 'geojson',
@@ -256,60 +229,27 @@
           activePopup = null;
         }
 
-        const hasImage = mediaItems.length > 0 && mediaItems[0].type === 'image';
-        const mediaHtml = hasImage
-          ? `<div class="popup-img-wrap">
-               <div class="popup-img-spinner" aria-hidden="true"></div>
-               <img class="popup-media" src="${mediaItems[0].url}" alt="" />
-             </div>`
-          : '';
-        const descHtml = rawDescription
-          ? `<div class="popup-desc">${simpleMarkdownToHtml(rawDescription)}</div>`
-          : '';
-        const catHtml = catLabel
-          ? `<div class="popup-category">${catIconUrl ? `<img src="${catIconUrl}" class="popup-cat-icon" alt="" />` : ''}${catLabel}</div>`
-          : '';
-
         const coords = (feature.geometry as any).coordinates.slice();
-        const popupEl = document.createElement('div');
-        popupEl.className = 'marker-popup';
-        popupEl.innerHTML = `
-          ${mediaHtml}
-          <div class="popup-body">
-            ${catHtml}
-            <div class="popup-title">${locTitle}</div>
-            ${descHtml}
-            <button class="popup-toggle ${isFound ? 'found' : ''}">
-              ${isFound ? '✓ Found — click to unmark' : 'Mark as found'}
-            </button>
-          </div>
-        `;
-
-        // Wire up image loading: show spinner until loaded, hide on error
-        const img = popupEl.querySelector('.popup-media') as HTMLImageElement | null;
-        if (img) {
-          const spinner = img.previousElementSibling as HTMLElement | null;
-          img.addEventListener('load', () => {
-            if (spinner) spinner.style.display = 'none';
-            img.style.opacity = '1';
-          });
-          img.addEventListener('error', () => {
-            if (spinner) spinner.style.display = 'none';
-            img.style.display = 'none';
-          });
-        }
-
-        const btn = popupEl.querySelector('.popup-toggle')!;
-        btn.addEventListener('click', () => {
-          if (!activeMap) return;
-          const [updated, nowFound] = toggleFound(game.id, activeMap.id, locId);
-          foundIds = updated;
-          updateFoundState();
-          broadcastFoundChange();
-
-          btn.className = `popup-toggle ${nowFound ? 'found' : ''}`;
-          btn.textContent = nowFound ? '✓ Found — click to unmark' : 'Mark as found';
-        });
+        // Build the popup DOM in lib/map/popup.ts; we keep the state change here
+        // (toggleFound + rebroadcast) and just hand the builder a callback.
+        const popupEl = buildMarkerPopupElement(
+          {
+            title: locTitle,
+            isFound,
+            categoryLabel: catLabel,
+            categoryIconUrl: catIconUrl,
+            description: rawDescription,
+            media: mediaItems,
+          },
+          () => {
+            if (!activeMap) return false;
+            const [updated, nowFound] = toggleFound(game.id, activeMap.id, locId);
+            foundIds = updated;
+            updateFoundState();
+            broadcastFoundChange();
+            return nowFound;
+          },
+        );
 
         activePopup = new maplibregl.Popup({ offset: 25, closeOnClick: true, maxWidth: '280px' })
           .setLngLat(coords)
@@ -452,67 +392,29 @@
     {/if}
     <h2 class="game-title">{game.title}</h2>
 
-    <div class="map-switcher">
-      {#each game.maps as map (map.id)}
-        <button
-          class="map-link"
-          class:selected={activeMap?.id === map.id}
-          onclick={() => loadMap(map)}
-        >
-          {map.title}
-        </button>
-      {/each}
-    </div>
+    <MapSwitcher maps={game.maps} activeMapId={activeMap?.id} onSelect={loadMap} />
 
     <hr />
 
     <!-- Progress overview -->
-    <div class="progress-section">
-      <div class="progress-header">
-        <h3>Progress</h3>
-        <span class="progress-count">{foundIds.size} / {totalLocations}</span>
-      </div>
-      <div class="progress-bar-track">
-        <div
-          class="progress-bar-fill"
-          style="width: {totalLocations > 0 ? (foundIds.size / totalLocations) * 100 : 0}%"
-        ></div>
-      </div>
-      <div class="progress-actions">
-        <label class="hide-found-toggle">
-          <input type="checkbox" checked={hideFound} onchange={toggleHideFound} />
-          <span>Hide found</span>
-        </label>
-        {#if foundIds.size > 0}
-          <button class="clear-btn" onclick={handleClearAll}>Reset all</button>
-        {/if}
-      </div>
-    </div>
+    <ProgressPanel
+      foundCount={foundIds.size}
+      {totalLocations}
+      {hideFound}
+      onToggleHideFound={toggleHideFound}
+      onClearAll={handleClearAll}
+    />
 
     <hr />
 
-    <div class="filters">
-      <h3>Filters</h3>
-      {#if categories.length === 0 && !isLoadingMap}
-        <p class="no-categories">No categories found.</p>
-      {/if}
-      {#each categories as cat (cat.id)}
-        <label class="filter-item">
-          <input
-            type="checkbox"
-            checked={visibleCategoryIds.has(cat.id)}
-            onchange={() => toggleCategory(cat.id)}
-          />
-          {#if cat.iconUrl}
-            <img src={cat.iconUrl} alt="" class="filter-icon" />
-          {/if}
-          <span class="filter-label">{cat.label}</span>
-          <span class="filter-progress">
-            {foundInCategory(cat.id)}/{categoryLocationCounts.get(cat.id) ?? 0}
-          </span>
-        </label>
-      {/each}
-    </div>
+    <CategoryFilters
+      {categories}
+      {visibleCategoryIds}
+      {categoryLocationCounts}
+      {foundInCategory}
+      {isLoadingMap}
+      onToggleCategory={toggleCategory}
+    />
   </aside>
 
   <main class="map-area" bind:this={mapContainer}>
@@ -563,151 +465,13 @@
     margin-bottom: 1rem;
   }
 
-  .map-switcher {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .map-link {
-    background: transparent;
-    border: 1px solid #3d3a4f;
-    border-radius: 6px;
-    color: #f6f6f6;
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-    cursor: pointer;
-    font-size: 0.9rem;
-    transition: background 0.15s;
-  }
-
-  .map-link:hover {
-    background: #2a2540;
-  }
-
-  .map-link.selected {
-    background: #cf30aa;
-    border-color: #cf30aa;
-  }
+  /* The map list, progress box and category filters now live in their own
+     components (MapSwitcher / ProgressPanel / CategoryFilters), each carrying its
+     own scoped styles. */
 
   hr {
     border-color: #3d3a4f;
     margin: 1.25rem 0;
-  }
-
-  .filters h3 {
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    color: #c0b9c0;
-    margin-bottom: 0.6rem;
-  }
-
-  .filter-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0;
-    font-size: 0.9rem;
-    cursor: pointer;
-  }
-
-  .filter-icon {
-    width: 20px;
-    height: 20px;
-    object-fit: contain;
-    flex-shrink: 0;
-  }
-
-  .filter-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .filter-progress {
-    font-size: 0.75rem;
-    color: #a78bfa;
-    flex-shrink: 0;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .no-categories {
-    font-size: 0.85rem;
-    color: #c0b9c0;
-  }
-
-  /* ── Progress section ── */
-  .progress-section {
-    margin-bottom: 0.25rem;
-  }
-
-  .progress-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-  }
-
-  .progress-header h3 {
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    color: #c0b9c0;
-    margin: 0;
-  }
-
-  .progress-count {
-    font-size: 0.85rem;
-    color: #a78bfa;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .progress-bar-track {
-    height: 6px;
-    background: #2a2540;
-    border-radius: 3px;
-    overflow: hidden;
-    margin-bottom: 0.6rem;
-  }
-
-  .progress-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #a78bfa, #cf30aa);
-    border-radius: 3px;
-    transition: width 0.3s ease;
-    min-width: 0;
-  }
-
-  .progress-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-
-  .hide-found-toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.8rem;
-    color: #c0b9c0;
-    cursor: pointer;
-  }
-
-  .clear-btn {
-    background: transparent;
-    border: 1px solid #5b3a50;
-    border-radius: 4px;
-    color: #f87171;
-    font-size: 0.75rem;
-    padding: 0.2rem 0.5rem;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .clear-btn:hover {
-    background: #3b1a30;
   }
 
   .map-area {
