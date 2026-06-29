@@ -108,9 +108,8 @@
   .grid-layout {
     width: 100%;
     max-width: 1400px;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 1.25rem;
   }
 
@@ -120,9 +119,10 @@
     align-items: center;
     gap: 0.5rem;
     cursor: pointer;
-    flex: 1 1 180px;
-    max-width: 240px;
     transition: transform 0.2s ease;
+    /* Suppress the iOS blue tap flash on non-button interactive elements */
+    -webkit-tap-highlight-color: transparent;
+    min-height: 44px;
   }
 
   .game-tile:hover {
@@ -198,5 +198,16 @@
     padding: 0.75rem 1.25rem;
     border-radius: 8px;
     margin-bottom: 1rem;
+  }
+
+  @media (max-width: 600px) {
+    .library-container {
+      padding-inline: 0.75rem;
+    }
+
+    .grid-layout {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.75rem;
+    }
   }
 </style>
