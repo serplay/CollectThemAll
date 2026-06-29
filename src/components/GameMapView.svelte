@@ -48,6 +48,7 @@
   let hideFound = $state(false);
   let totalLocations = $state(0);
   let activePopup: maplibregl.Popup | null = null;
+  let sidebarOpen = $state(false);
   // Per-category location counts for progress tracking
   let categoryLocationCounts = $state<Map<number, number>>(new Map());
   // Our own reference to the GeoJSON data so we can update it reliably
@@ -386,7 +387,7 @@
 </script>
 
 <div class="map-page" class:overlay>
-  <aside class="sidebar">
+  <aside class="sidebar" class:open={sidebarOpen}>
     {#if !overlay}
       <a href="/" class="back-link">← Back to library</a>
     {/if}
@@ -423,7 +424,14 @@
     {:else if loadError}
       <div class="status error">{loadError}</div>
     {/if}
+    {#if !overlay}
+      <button class="sidebar-toggle" onclick={() => sidebarOpen = !sidebarOpen} aria-label="Toggle map controls">☰</button>
+    {/if}
   </main>
+
+  {#if sidebarOpen}
+    <div class="sidebar-backdrop" role="presentation" onclick={() => sidebarOpen = false}></div>
+  {/if}
 </div>
 
 <style>
@@ -638,5 +646,77 @@
 
   @keyframes popup-spin {
     to { transform: rotate(360deg); }
+  }
+
+  /* Desktop: toggle and backdrop are invisible — pure CSS, no JS branching needed */
+  .sidebar-toggle {
+    display: none;
+  }
+
+  .sidebar-backdrop {
+    display: none;
+  }
+
+  @media (max-width: 600px) {
+    /* Fixed positioning pulls the sidebar out of the flex row so the map fills
+       the full viewport. The slide distance is exactly the sheet height, so
+       translateY(100%) fully hides it off-screen — no magic number needed. */
+    .sidebar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      height: 75vh;
+      border-radius: 16px 16px 0 0;
+      /* Cubic-bezier matches iOS sheet spring feel — the higher initial velocity
+         then deceleration reads as physical rather than mechanical. */
+      transform: translateY(100%);
+      transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+      z-index: 100;
+      /* env() only resolves non-zero when viewport-fit=cover is set in <meta>.
+         This keeps sidebar content above the iPhone home indicator. */
+      padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+    }
+
+    .sidebar.open {
+      transform: translateY(0);
+    }
+
+    .sidebar-toggle {
+      display: flex;
+      position: absolute;
+      bottom: calc(1rem + env(safe-area-inset-bottom));
+      right: 1rem;
+      width: 44px;
+      height: 44px;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      background: rgba(22, 19, 41, 0.9);
+      border: 1px solid rgba(167, 139, 250, 0.4);
+      border-radius: 12px;
+      color: #a78bfa;
+      font-size: 1.25rem;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    /* Backdrop captures taps outside the sheet and blocks map touch events
+       while the sidebar is open — without this, panning would leak through. */
+    .sidebar-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 99;
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    /* Keep MapLibre's attribution control above the home indicator */
+    :global(.maplibregl-ctrl-bottom-right),
+    :global(.maplibregl-ctrl-bottom-left) {
+      margin-bottom: env(safe-area-inset-bottom);
+    }
   }
 </style>
