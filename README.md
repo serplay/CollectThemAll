@@ -16,7 +16,7 @@
   <img alt="Platforms" src="https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-blue">
 </p>
 
-> 📱 **Mobile version incoming** — the UI and state logic already share a codebase that compiles to Android and iOS via Tauri v2. Native mobile builds are on the roadmap.
+> 📱 **iOS support is in active development** — the UI and state logic share a codebase that compiles to iOS via Tauri v2. See the [iOS section](#ios) below.
 
 ## What it does
 
@@ -129,6 +129,41 @@ npm run tauri build
 
 Optimized installers/executables are written to `src-tauri/target/release/bundle/`.
 
+## iOS
+
+The iOS port shares the same Svelte 5 frontend and Rust backend as the desktop build. Tiles stream on demand via the `tile://` protocol handled by WKWebView — no bulk pre-download is needed or triggered automatically.
+
+### Requirements
+
+- **macOS** (Xcode runs only on Apple hardware)
+- **Xcode** 16+ with iOS SDK installed
+- **CocoaPods** — `brew install cocoapods`
+- **Rust iOS targets:**
+
+  ```bash
+  rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+  ```
+
+### Run on Simulator
+
+```bash
+npm run tauri ios dev
+```
+
+### Build for Device
+
+A device build requires an Apple Developer account and provisioning profile. Set your 10-character team ID before building:
+
+```bash
+export APPLE_DEVELOPMENT_TEAM=XXXXXXXXXX
+npm run tauri ios build
+```
+
+### Known limits
+
+- **Overlay is desktop-only.** The always-on-top overlay window and the `Ctrl+Alt+\`` global hotkey are compiled out on mobile (`#[cfg(desktop)]` in Rust) and redirect to `/` as a defence-in-depth measure on the frontend. This is by design.
+- **No bulk tile pre-download on mobile.** The "Download all tiles" commands exist in the Rust backend but are not exposed in the mobile UI. Tiles stream in on demand as you pan and zoom.
+
 ## Project structure
 
 ```text
@@ -179,7 +214,8 @@ CollectThemAll/
 
 ## Roadmap
 
-- [ ] Native Android & iOS builds
+- [x] iOS build (in active development — see [iOS](#ios))
+- [ ] Native Android build
 - [ ] User-defined custom markers and notes
 - [ ] Cloud sync of found progress across devices
 
