@@ -614,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "cta-collectthemall"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "image",
  "reqwest 0.12.28",
