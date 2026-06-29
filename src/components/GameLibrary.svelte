@@ -233,19 +233,19 @@
       grid-template-columns: repeat(2, 1fr);
       gap: 0.75rem;
     }
+  }
 
-    /* Pin the search bar to the top so the user never has to scroll back up to search.
-       Background matches the app's root colour (#010201) so game tiles scroll cleanly
-       behind it without bleeding through the bar. env(safe-area-inset-top) keeps it
-       below the notch on devices where viewport-fit=cover pushes content edge-to-edge. */
+  /* Pin the search bar to the top so the user never has to scroll back up to search.
+     Two conditions so it triggers on phones in BOTH orientations: portrait phones
+     match max-width, landscape phones (wide but very short) match max-height. The
+     desktop window is both wide and tall, so it keeps the non-sticky layout. */
+  @media (max-width: 600px), (max-height: 600px) {
     .search-sticky-wrap {
       position: sticky;
+      /* env(safe-area-inset-top) keeps it below the notch on devices where
+         viewport-fit=cover pushes content edge-to-edge. */
       top: env(safe-area-inset-top, 0px);
       z-index: 20;
-      background: #010201;
-      /* Stretch edge-to-edge to cover the grid tiles scrolling behind */
-      margin-inline: -0.75rem;
-      padding-inline: 0.75rem;
     }
 
     /* Trim the SearchBar's built-in 2.5rem gap so the sticky strip stays compact */
