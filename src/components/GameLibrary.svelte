@@ -50,14 +50,19 @@
 </script>
 
 <div class="library-container">
-  <SearchBar bind:value={searchQuery} />
+  <div class="search-sticky-wrap">
+    <SearchBar bind:value={searchQuery} />
+  </div>
 
   {#if downloadError}
     <div class="error-banner" transition:fade={{ duration: 200 }}>{downloadError}</div>
   {/if}
 
   {#if isLoading}
-    <div class="loader" out:fade={{ duration: 200 }}>Loading maps...</div>
+    <div class="loader" out:fade={{ duration: 200 }}>
+      <span class="loader-spinner"></span>
+      <span>Loading game library…</span>
+    </div>
   {:else}
     <div class="grid-layout">
       {#each filteredGames as game, i (game.id)}
@@ -187,9 +192,28 @@
     overflow-wrap: break-word;
   }
 
+  .search-sticky-wrap {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
   .loader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
     color: #c0b9c0;
     padding: 3rem;
+  }
+
+  .loader-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255, 255, 255, 0.15);
+    border-top-color: #cf30aa;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
   }
 
   .error-banner {
@@ -208,6 +232,25 @@
     .grid-layout {
       grid-template-columns: repeat(2, 1fr);
       gap: 0.75rem;
+    }
+
+    /* Pin the search bar to the top so the user never has to scroll back up to search.
+       Background matches the app's root colour (#010201) so game tiles scroll cleanly
+       behind it without bleeding through the bar. env(safe-area-inset-top) keeps it
+       below the notch on devices where viewport-fit=cover pushes content edge-to-edge. */
+    .search-sticky-wrap {
+      position: sticky;
+      top: env(safe-area-inset-top, 0px);
+      z-index: 20;
+      background: #010201;
+      /* Stretch edge-to-edge to cover the grid tiles scrolling behind */
+      margin-inline: -0.75rem;
+      padding-inline: 0.75rem;
+    }
+
+    /* Trim the SearchBar's built-in 2.5rem gap so the sticky strip stays compact */
+    .search-sticky-wrap :global(.search-bar-row) {
+      margin-block: 0.6rem;
     }
   }
 </style>
