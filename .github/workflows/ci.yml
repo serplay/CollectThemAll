@@ -91,3 +91,48 @@ jobs:
       - name: Check iOS target (no signing)
         run: cargo check --target aarch64-apple-ios
         working-directory: src-tauri
+
+  # cargo check verifies the Rust Android target compiles cleanly without
+  # needing a keystore, NDK full build, or emulator.
+  android-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK 26
+        run: sdkmanager "ndk;26.3.11579264"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # cargo-ndk locates the NDK and exports the CC/AR/linker env that ring's
+      # cc-rs build script needs to cross-compile — a bare `cargo check` can't
+      # find aarch64-linux-android-clang on its own and fails.
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Check Android target (no signing)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
+        run: cargo ndk -t arm64-v8a check
+        working-directory: src-tauri

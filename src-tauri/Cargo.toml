@@ -18,7 +18,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-reqwest = { version = "0.12", features = ["json"] }
+# rustls instead of the default native-tls: native-tls links the platform's
+# OpenSSL, which has no cross-compile path to Android (openssl-sys fails to
+# build for aarch64-linux-android). rustls is pure Rust and builds identically
+# on desktop and mobile. Bundled webpki-roots mean we trust the standard CA set
+# the same way everywhere rather than depending on each OS's cert store layout —
+# fine here since we only talk to a public HTTPS API (mapgenie.io).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

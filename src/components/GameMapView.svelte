@@ -366,8 +366,35 @@
 
   let unlistenFound: UnlistenFn | null = null;
 
+  // Push a sentinel history entry when the sidebar opens so that Android's
+  // hardware back gesture closes the drawer rather than navigating away.
+  // The sentinel carries { ctaDrawer: true } so we can identify it in popstate.
+  function openSidebar() {
+    sidebarOpen = true;
+    history.pushState({ ctaDrawer: true }, '');
+  }
+
+  function closeSidebar() {
+    sidebarOpen = false;
+    // If the top history entry is our sentinel, pop it so subsequent back
+    // gestures navigate normally (e.g. back to the library).
+    if (history.state?.ctaDrawer) {
+      history.back();
+    }
+  }
+
+  function onPopState(e: PopStateEvent) {
+    // Android back gesture pops the history stack. If it pops our drawer
+    // sentinel, intercept it to close the sidebar instead of navigating.
+    if (e.state?.ctaDrawer) {
+      sidebarOpen = false;
+    }
+  }
+
   onMount(() => {
     if (activeMap) loadMap(activeMap);
+
+    window.addEventListener('popstate', onPopState);
 
     // Two-way live sync of found markers between the main window and the overlay.
     listen<FoundChange>('cta:found-changed', (e) => {
@@ -381,6 +408,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('popstate', onPopState);
     unlistenFound?.();
     mapInstance?.remove();
   });
@@ -425,12 +453,12 @@
       <div class="status error">{loadError}</div>
     {/if}
     {#if !overlay}
-      <button class="sidebar-toggle" onclick={() => sidebarOpen = !sidebarOpen} aria-label="Toggle map controls">☰</button>
+      <button class="sidebar-toggle" onclick={() => sidebarOpen ? closeSidebar() : openSidebar()} aria-label="Toggle map controls">☰</button>
     {/if}
   </main>
 
   {#if sidebarOpen}
-    <div class="sidebar-backdrop" role="presentation" onclick={() => sidebarOpen = false}></div>
+    <div class="sidebar-backdrop" role="presentation" onclick={() => closeSidebar()}></div>
   {/if}
 </div>
 

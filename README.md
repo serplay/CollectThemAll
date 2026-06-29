@@ -159,7 +159,53 @@ export APPLE_DEVELOPMENT_TEAM=XXXXXXXXXX
 npm run tauri ios build
 ```
 
-### Known limits
+### iOS limits
+
+- **Overlay is desktop-only.** The always-on-top overlay window and the `Ctrl+Alt+\`` global hotkey are compiled out on mobile (`#[cfg(desktop)]` in Rust) and redirect to `/` as a defence-in-depth measure on the frontend. This is by design.
+- **No bulk tile pre-download on mobile.** The "Download all tiles" commands exist in the Rust backend but are not exposed in the mobile UI. Tiles stream in on demand as you pan and zoom.
+
+## Android
+
+The Android port shares the same Svelte 5 frontend and Rust backend as the desktop and iOS builds. Tiles stream on demand via `http://tile.localhost` (Android WebView cannot `fetch()` a raw custom scheme, so Tauri maps `tile://` to this HTTP alias automatically). A release-signed `.apk` is attached to every GitHub Release.
+
+### Requirements
+
+- **JDK 17+**
+- **Android Studio** (includes SDK, build tools, and `sdkmanager`)
+- **NDK 26** — install via Android Studio SDK Manager or:
+
+  ```bash
+  sdkmanager "ndk;26.3.11579264"
+  ```
+
+- **Rust Android targets:**
+
+  ```bash
+  rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+  ```
+
+- Set environment variables (add to `~/.zshrc`):
+
+  ```bash
+  export ANDROID_HOME="$HOME/Library/Android/sdk"
+  export NDK_HOME="$ANDROID_HOME/ndk/26.3.11579264"
+  ```
+
+### Run on Emulator or Device
+
+```bash
+npm run tauri android dev
+```
+
+### Build APK
+
+```bash
+npm run tauri android build -- --apk
+```
+
+The signed APK is also attached to every GitHub Release automatically by CI.
+
+### Android limits
 
 - **Overlay is desktop-only.** The always-on-top overlay window and the `Ctrl+Alt+\`` global hotkey are compiled out on mobile (`#[cfg(desktop)]` in Rust) and redirect to `/` as a defence-in-depth measure on the frontend. This is by design.
 - **No bulk tile pre-download on mobile.** The "Download all tiles" commands exist in the Rust backend but are not exposed in the mobile UI. Tiles stream in on demand as you pan and zoom.
@@ -215,7 +261,7 @@ CollectThemAll/
 ## Roadmap
 
 - [x] iOS build (in active development — see [iOS](#ios))
-- [ ] Native Android build
+- [x] Native Android build (in active development — see [Android](#android))
 - [ ] User-defined custom markers and notes
 - [ ] Cloud sync of found progress across devices
 
