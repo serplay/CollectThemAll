@@ -17,6 +17,9 @@ use tauri::http::{Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::fs;
 
+use crate::db::tiles as tiles_db;
+use crate::db::TilesDb;
+
 // The data "shapes" now live in their own file. We pull them back in here so the
 // rest of the code can keep using them by their short names (Game, Map, ...).
 mod models;
@@ -132,7 +135,9 @@ pub fn get_game_asset_path(
 
 /// Downloads everything needed to play a single game offline: every map's
 /// location data and image, the marker sprite sheet sliced by category ID
-/// (so the frontend can look up icons by category_id directly).
+/// (so the frontend can look up icons by category_id directly). Note: map
+/// tiles are NOT part of this — they live in the separate tiles SQLite
+/// database (see `download_map_tiles` / `download_all_game_tiles`).
 #[tauri::command]
 pub async fn download_game_assets(app: AppHandle, game_id: u32) -> Result<(), String> {
     let game = get_cached_game(&app, game_id).await?;
@@ -255,8 +260,9 @@ pub async fn game_assets_ready(app: AppHandle, game_id: u32) -> Result<bool, Str
 }
 
 /// Downloads all map tiles for a specific map at all zoom levels defined in the
-/// tile config. Tiles are stored at their native (Web Mercator) z/x/y coordinates,
-/// served directly by the `tile://` protocol handler. Saves a tile_meta.json
+/// tile config. Tiles are stored as BLOBs in tiles.sqlite, keyed by their native
+/// (Web Mercator) z/x/y coordinates — one indexed table instead of one file per
+/// tile, served directly by the `tile://` protocol handler. Saves a tile_meta.json
 /// alongside with extension and zoom range info.
 #[tauri::command]
 pub async fn download_map_tiles(app: AppHandle, game_id: u32, map_id: u32) -> Result<(), String> {
@@ -281,7 +287,6 @@ pub async fn download_map_tiles(app: AppHandle, game_id: u32, map_id: u32) -> Re
         .join(game_id.to_string())
         .join("maps")
         .join(map_id.to_string());
-    let tiles_dir = map_dir.join("tiles");
 
     // tiles_base_url is "https://tiles.mapgenie.io"; CDN path is /games/{pattern}
     let tiles_base = format!(
@@ -309,23 +314,27 @@ pub async fn download_map_tiles(app: AppHandle, game_id: u32, map_id: u32) -> Re
                         .replace("{x}", &x.to_string())
                         .replace("{y}", &y.to_string())
                 );
-                let out_path = tiles_dir
-                    .join(zoom.to_string())
-                    .join(x.to_string())
-                    .join(format!("{}.{}", y, ext));
                 let client = client.clone();
                 let sem = semaphore.clone();
+                let ext = ext.clone();
+                let app = app.clone();
                 join_set.spawn(async move {
                     let _permit = sem.acquire().await.unwrap();
-                    if let Some(parent) = out_path.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
+                    let conn = app.state::<TilesDb>();
+                    let guard = conn.0.lock().await;
+                    let cached = tiles_db::has_tile(&guard, game_id, map_id, zoom, x, y).unwrap_or(false);
+                    drop(guard);
+                    if cached {
+                        return;
                     }
-                    let _ = download_file(&client, &url, out_path).await;
+                    let Ok(bytes) = fetch_bytes(&client, &url).await else { return };
+                    let conn = app.state::<TilesDb>();
+                    let guard = conn.0.lock().await;
+                    let _ = tiles_db::put_tile(&guard, game_id, map_id, zoom, x, y, &ext, &bytes);
                 });
             }
         }
     }
-
     while join_set.join_next().await.is_some() {}
 
     // Save tile metadata so the frontend knows zoom range and file extension, and the
@@ -347,10 +356,10 @@ pub async fn download_map_tiles(app: AppHandle, game_id: u32, map_id: u32) -> Re
     Ok(())
 }
 
-/// Downloads tiles for EVERY map in a game so all previews open instantly from disk
-/// afterwards. Emits `tile-download-progress` events ({gameId, downloaded, total}) so
-/// the UI can show a percentage. Already-downloaded tiles are skipped (download_file
-/// short-circuits on existing files) but still counted, so re-running jumps to 100%.
+/// Downloads tiles for EVERY map in a game so all previews open instantly afterwards.
+/// Emits `tile-download-progress` events ({gameId, downloaded, total}) so the UI can
+/// show a percentage. Already-downloaded tiles are skipped (checked against tiles.sqlite)
+/// but still counted, so re-running jumps to 100%.
 #[tauri::command]
 pub async fn download_all_game_tiles(app: AppHandle, game_id: u32) -> Result<(), String> {
     let game = get_cached_game(&app, game_id).await?;
@@ -410,12 +419,7 @@ pub async fn download_all_game_tiles(app: AppHandle, game_id: u32) -> Result<(),
     let step = (total / 100).max(1);
 
     for job in &jobs {
-        let map_tiles_dir = data_dir
-            .join("assets")
-            .join(game_id.to_string())
-            .join("maps")
-            .join(job.map_id.to_string())
-            .join("tiles");
+        let map_id = job.map_id;
         let ext = job.tile_set.extension.clone();
 
         for zoom in job.tile_set.min_zoom..=job.tile_set.max_zoom {
@@ -433,20 +437,26 @@ pub async fn download_all_game_tiles(app: AppHandle, game_id: u32) -> Result<(),
                             .replace("{x}", &x.to_string())
                             .replace("{y}", &y.to_string())
                     );
-                    let out_path = map_tiles_dir
-                        .join(zoom.to_string())
-                        .join(x.to_string())
-                        .join(format!("{}.{}", y, ext));
                     let client = client.clone();
                     let sem = semaphore.clone();
                     let counter = downloaded.clone();
                     let app = app.clone();
+                    let ext = ext.clone();
                     join_set.spawn(async move {
                         let _permit = sem.acquire().await.unwrap();
-                        if let Some(parent) = out_path.parent() {
-                            let _ = tokio::fs::create_dir_all(parent).await;
+                        let already_cached = {
+                            let db = app.state::<TilesDb>();
+                            let guard = db.0.lock().await;
+                            tiles_db::has_tile(&guard, game_id, map_id, zoom, x, y).unwrap_or(false)
+                        };
+                        if !already_cached {
+                            if let Ok(bytes) = fetch_bytes(&client, &url).await {
+                                let db = app.state::<TilesDb>();
+                                let guard = db.0.lock().await;
+                                let _ =
+                                    tiles_db::put_tile(&guard, game_id, map_id, zoom, x, y, &ext, &bytes);
+                            }
                         }
-                        let _ = download_file(&client, &url, out_path).await;
 
                         let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
                         if n % step == 0 || n == total {
@@ -556,10 +566,11 @@ pub async fn ensure_tile_meta(
     Ok(meta)
 }
 
-/// Serves a tile for the `tile://` protocol: returns it from disk if cached, otherwise
-/// fetches it from the CDN on the fly, caches it to disk, and returns the bytes. This is
-/// what lets the map open instantly and sharpen as tiles stream in. Every response carries
-/// `Access-Control-Allow-Origin` so cross-origin (localhost → tile.localhost) requests pass.
+/// Serves a tile for the `tile://` protocol: returns it from tiles.sqlite if cached,
+/// otherwise fetches it from the CDN on the fly, caches it to the database, and returns
+/// the bytes. This is what lets the map open instantly and sharpen as tiles stream in.
+/// Every response carries `Access-Control-Allow-Origin` so cross-origin (localhost →
+/// tile.localhost) requests pass.
 pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>> {
     let cors_error = |status: StatusCode| {
         Response::builder()
@@ -589,18 +600,9 @@ pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>
         "image/png"
     };
 
-    let Ok(data_dir) = app.path().app_data_dir() else {
-        return cors_error(StatusCode::INTERNAL_SERVER_ERROR);
+    let (Ok(z), Ok(x), Ok(y)) = (z.parse::<u32>(), x.parse::<u32>(), y.parse::<u32>()) else {
+        return cors_error(StatusCode::BAD_REQUEST);
     };
-    let tile_path = data_dir
-        .join("assets")
-        .join(game_id.to_string())
-        .join("maps")
-        .join(map_id.to_string())
-        .join("tiles")
-        .join(z)
-        .join(x)
-        .join(format!("{}.{}", y, meta.extension));
 
     let ok_response = |bytes: Vec<u8>| {
         Response::builder()
@@ -610,9 +612,13 @@ pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>
             .unwrap()
     };
 
-    // 1. Cache hit on disk.
-    if let Ok(bytes) = fs::read(&tile_path).await {
-        return ok_response(bytes);
+    // 1. Cache hit in the tiles database.
+    {
+        let db = app.state::<TilesDb>();
+        let guard = db.0.lock().await;
+        if let Ok(Some((bytes, _ext))) = tiles_db::get_tile(&guard, game_id, map_id, z, x, y) {
+            return ok_response(bytes);
+        }
     }
 
     // 2. Cache miss → fetch from CDN, then persist for offline use.
@@ -621,9 +627,9 @@ pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>
     }
     let url = meta
         .url_template
-        .replace("{z}", z)
-        .replace("{x}", x)
-        .replace("{y}", y);
+        .replace("{z}", &z.to_string())
+        .replace("{x}", &x.to_string())
+        .replace("{y}", &y.to_string());
     let Ok(resp) = tile_client().get(&url).send().await else {
         return cors_error(StatusCode::BAD_GATEWAY);
     };
@@ -636,10 +642,10 @@ pub async fn serve_tile_request(app: &AppHandle, path: &str) -> Response<Vec<u8>
     };
     let bytes = bytes.to_vec();
 
-    if let Some(parent) = tile_path.parent() {
-        let _ = fs::create_dir_all(parent).await;
-    }
-    let _ = fs::write(&tile_path, &bytes).await;
+    let db = app.state::<TilesDb>();
+    let guard = db.0.lock().await;
+    let _ = tiles_db::put_tile(&guard, game_id, map_id, z, x, y, &meta.extension, &bytes);
+    drop(guard);
 
     ok_response(bytes)
 }

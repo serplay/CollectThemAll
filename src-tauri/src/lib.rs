@@ -8,6 +8,7 @@
 //! and therefore must be careful about which paths/URLs it will fetch.
 
 mod commands;
+mod db;
 
 /// Shows the in-game overlay if it's hidden, hides it if it's visible, creating the
 /// always-on-top overlay window on first use (so there's no spare window at startup).
@@ -47,6 +48,11 @@ fn toggle_overlay(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            use tauri::Manager;
+            let (user_db, tiles_db) = db::init(app.handle())?;
+            app.manage(user_db);
+            app.manage(tiles_db);
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -86,7 +92,16 @@ pub fn run() {
             commands::mapgenie::game_assets_ready,
             commands::mapgenie::download_map_tiles,
             commands::mapgenie::download_all_game_tiles,
-            commands::mapgenie::ensure_tile_meta
+            commands::mapgenie::ensure_tile_meta,
+            commands::userdata::get_found_ids,
+            commands::userdata::set_found,
+            commands::userdata::set_found_bulk,
+            commands::userdata::clear_found,
+            commands::userdata::list_custom_markers,
+            commands::userdata::add_custom_marker,
+            commands::userdata::update_custom_marker,
+            commands::userdata::delete_custom_marker,
+            commands::userdata::import_found_from_storage
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

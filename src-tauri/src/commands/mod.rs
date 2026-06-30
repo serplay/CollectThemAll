@@ -7,3 +7,4 @@
 //! `commands` area makes that boundary easy to find and review.
 
 pub mod mapgenie;
+pub mod userdata;

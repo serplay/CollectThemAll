@@ -55,3 +55,13 @@ pub async fn download_file(client: &Client, url: &str, path: PathBuf) -> Result<
     fs::write(&path, bytes).await.map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Fetches one URL's bytes without writing them anywhere — used for tiles,
+/// which are persisted into the tiles SQLite database rather than a file.
+pub async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>, String> {
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} for {}", resp.status(), url));
+    }
+    resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
+}
