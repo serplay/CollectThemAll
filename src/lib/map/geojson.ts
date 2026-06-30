@@ -41,3 +41,30 @@ export function buildLocationGeoJson(
       })),
   };
 }
+
+/** Build the feature collection for the player's own custom markers. Unlike the
+ *  downloaded MapGenie locations, latitude/longitude here are already numbers
+ *  (they came straight out of SQLite, not parsed from untrusted JSON text). */
+export function buildCustomMarkerGeoJson(markers: {
+  id: number;
+  latitude: number;
+  longitude: number;
+  title: string;
+  description: string;
+}[]): LocationFeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: markers.map((m) => ({
+      type: 'Feature' as const,
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [m.longitude, m.latitude],
+      },
+      properties: {
+        id: m.id,
+        title: m.title,
+        description: m.description,
+      },
+    })),
+  };
+}

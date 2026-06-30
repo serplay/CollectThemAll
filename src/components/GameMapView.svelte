@@ -6,14 +6,23 @@
   import { getMapData, getMarkerIconUrl, ensureTileMeta } from '../lib/api/mapgenie';
   import type { Game, Map as GameMap } from '../lib/types/mapgenie';
   import { loadFoundIds, toggleFound, clearFound, setFoundIds } from '../lib/stores/foundMarkers';
+  import {
+    listCustomMarkers,
+    addCustomMarker,
+    updateCustomMarker,
+    deleteCustomMarker,
+    type CustomMarker,
+  } from '../lib/api/customMarkers';
+  import { isTauriMobile } from '../lib/platform';
   // Small, focused helpers extracted from this component for the modularity assignment.
-  import { buildLocationGeoJson } from '../lib/map/geojson';
+  import { buildLocationGeoJson, buildCustomMarkerGeoJson } from '../lib/map/geojson';
   import { buildTileUrlTemplate } from '../lib/map/tileUrl';
-  import { buildMarkerPopupElement } from '../lib/map/popup';
+  import { buildMarkerPopupElement, buildCustomMarkerPopupElement } from '../lib/map/popup';
   // Sidebar pieces split into their own presentational components.
   import MapSwitcher from './MapSwitcher.svelte';
   import ProgressPanel from './ProgressPanel.svelte';
   import CategoryFilters from './CategoryFilters.svelte';
+  import AddMarkerDialog from './AddMarkerDialog.svelte';
 
   // Identifies this window so we ignore our own broadcasts (we already updated locally).
   let windowLabel = '';
@@ -53,6 +62,18 @@
   let categoryLocationCounts = $state<Map<number, number>>(new Map());
   // Our own reference to the GeoJSON data so we can update it reliably
   let geoJsonData: { type: 'FeatureCollection'; features: any[] } = { type: 'FeatureCollection', features: [] };
+
+  // Custom markers: the player's own pinned notes (see lib/api/customMarkers.ts).
+  let customMarkersList: CustomMarker[] = [];
+  let activeCustomPopup: maplibregl.Popup | null = null;
+  let addMarkerDialogOpen = $state(false);
+  let addMarkerDialogTitle = $state('');
+  let addMarkerDialogDescription = $state('');
+  // Set when adding a brand-new marker (pin location); cleared when editing an existing one.
+  let pendingMarkerLngLat = $state<{ lng: number; lat: number } | null>(null);
+  // Set when editing an existing marker; cleared when adding a new one. Drives whether
+  // the dialog shows a Delete button, so it needs to be reactive.
+  let editingMarkerId = $state<number | null>(null);
 
   async function loadMap(map: GameMap) {
     isLoadingMap = true;
@@ -122,8 +143,11 @@
     categoryLocationCounts = catCounts;
     totalLocations = locations.length;
 
-    // Load found state from localStorage
-    foundIds = loadFoundIds(game.id, map.id);
+    // Load found state from SQLite.
+    foundIds = await loadFoundIds(game.id, map.id);
+
+    // Load the player's own custom markers for this map.
+    customMarkersList = await listCustomMarkers(game.id, map.id);
 
     const catList = await Promise.all(
       [...seen.entries()].map(async ([id, label]) => ({
@@ -146,6 +170,11 @@
       minZoom: mapMinZoom,
       maxZoom: mapMaxZoom,
       renderWorldCopies: false,
+      // This is a flat 2D collectible map — no need for bearing/pitch, and right-click
+      // drag would otherwise fight with our right-click "Add marker" context menu.
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false,
     });
 
     // Provide a transparent 1×1 fallback for any image MapLibre can't find,
@@ -242,9 +271,9 @@
             description: rawDescription,
             media: mediaItems,
           },
-          () => {
+          async () => {
             if (!activeMap) return false;
-            const [updated, nowFound] = toggleFound(game.id, activeMap.id, locId);
+            const [updated, nowFound] = await toggleFound(game.id, activeMap.id, locId);
             foundIds = updated;
             updateFoundState();
             broadcastFoundChange();
@@ -264,6 +293,74 @@
       });
       mapInstance.on('mouseleave', 'markers-layer', () => {
         if (mapInstance) mapInstance.getCanvas().style.cursor = '';
+      });
+
+      // Custom markers: rendered as plain circles (no icon asset needed) so they're
+      // visually distinct from the downloaded MapGenie location markers.
+      mapInstance.addSource('custom-markers', {
+        type: 'geojson',
+        data: buildCustomMarkerGeoJson(customMarkersList),
+      });
+      mapInstance.addLayer({
+        id: 'custom-markers-layer',
+        type: 'circle',
+        source: 'custom-markers',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#cf30aa',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#f0ecff',
+        },
+      });
+
+      mapInstance.on('click', 'custom-markers-layer', (e) => {
+        if (!mapInstance || !e.features || e.features.length === 0) return;
+        const feature = e.features[0];
+        const id = feature.properties?.id;
+        const marker = customMarkersList.find((m) => m.id === id);
+        if (!marker) return;
+
+        if (activeCustomPopup) {
+          activeCustomPopup.remove();
+          activeCustomPopup = null;
+        }
+
+        const coords = (feature.geometry as any).coordinates.slice();
+        const popupEl = buildCustomMarkerPopupElement(
+          { title: marker.title, description: marker.description },
+          () => {
+            activeCustomPopup?.remove();
+            activeCustomPopup = null;
+            openEditMarkerDialog(marker);
+          },
+          async () => {
+            activeCustomPopup?.remove();
+            activeCustomPopup = null;
+            await deleteCustomMarker(marker.id);
+            await refreshCustomMarkers();
+            broadcastCustomMarkersChange();
+          },
+        );
+
+        activeCustomPopup = new maplibregl.Popup({ offset: 14, closeOnClick: true, maxWidth: '280px' })
+          .setLngLat(coords)
+          .setDOMContent(popupEl)
+          .addTo(mapInstance);
+      });
+
+      mapInstance.on('mouseenter', 'custom-markers-layer', () => {
+        if (mapInstance) mapInstance.getCanvas().style.cursor = 'pointer';
+      });
+      mapInstance.on('mouseleave', 'custom-markers-layer', () => {
+        if (mapInstance) mapInstance.getCanvas().style.cursor = '';
+      });
+
+      // Desktop: right-click anywhere on the map opens "Add marker" at that spot.
+      // Mobile has no right-click, so it gets a press-and-hold gesture instead
+      // (wired up in onMount via touch listeners on the map container).
+      mapInstance.on('contextmenu', (e) => {
+        e.preventDefault();
+        openAddMarkerDialog(e.lngLat);
       });
 
       applyFilter();
@@ -323,9 +420,9 @@
     applyFilter();
   }
 
-  function handleClearAll() {
+  async function handleClearAll() {
     if (!activeMap) return;
-    clearFound(game.id, activeMap.id);
+    await clearFound(game.id, activeMap.id);
     foundIds = new Set();
     updateFoundState();
     broadcastFoundChange();
@@ -343,12 +440,12 @@
     } satisfies FoundChange).catch(() => {});
   }
 
-  /** Apply a found set pushed from the other window: update local state, persist it to this
-   *  window's localStorage, and refresh the map + progress UI. */
-  function applyFoundChange(ids: number[]) {
+  /** Apply a found set pushed from the other window: update local state, persist it to
+   *  SQLite (both windows share the same database file), and refresh the map + progress UI. */
+  async function applyFoundChange(ids: number[]) {
     if (!activeMap) return;
     foundIds = new Set(ids);
-    setFoundIds(game.id, activeMap.id, foundIds);
+    await setFoundIds(game.id, activeMap.id, foundIds);
     updateFoundState();
   }
 
@@ -364,7 +461,129 @@
     return count;
   }
 
+  // ── Custom markers (user-created pins with notes) ─────────────────────────
+
+  /** Re-fetch this map's custom markers from SQLite and push them into the map source. */
+  async function refreshCustomMarkers() {
+    if (!activeMap) return;
+    customMarkersList = await listCustomMarkers(game.id, activeMap.id);
+    const source = mapInstance?.getSource('custom-markers') as maplibregl.GeoJSONSource | undefined;
+    source?.setData(buildCustomMarkerGeoJson(customMarkersList));
+  }
+
+  /** Opens the dialog to create a brand-new marker at the given map-coordinate. */
+  function openAddMarkerDialog(lngLat: { lng: number; lat: number }) {
+    pendingMarkerLngLat = { lng: lngLat.lng, lat: lngLat.lat };
+    editingMarkerId = null;
+    addMarkerDialogTitle = '';
+    addMarkerDialogDescription = '';
+    addMarkerDialogOpen = true;
+  }
+
+  /** Opens the dialog pre-filled to edit an existing marker. */
+  function openEditMarkerDialog(marker: CustomMarker) {
+    pendingMarkerLngLat = null;
+    editingMarkerId = marker.id;
+    addMarkerDialogTitle = marker.title;
+    addMarkerDialogDescription = marker.description;
+    addMarkerDialogOpen = true;
+  }
+
+  async function handleMarkerDialogSave(title: string, description: string) {
+    if (!activeMap) return;
+    if (editingMarkerId != null) {
+      await updateCustomMarker(editingMarkerId, title, description);
+    } else if (pendingMarkerLngLat) {
+      await addCustomMarker(
+        game.id,
+        activeMap.id,
+        pendingMarkerLngLat.lat,
+        pendingMarkerLngLat.lng,
+        title,
+        description,
+      );
+    }
+    addMarkerDialogOpen = false;
+    await refreshCustomMarkers();
+    broadcastCustomMarkersChange();
+  }
+
+  async function handleMarkerDialogDelete() {
+    if (editingMarkerId != null) {
+      await deleteCustomMarker(editingMarkerId);
+    }
+    addMarkerDialogOpen = false;
+    await refreshCustomMarkers();
+    broadcastCustomMarkersChange();
+  }
+
+  function handleMarkerDialogCancel() {
+    addMarkerDialogOpen = false;
+  }
+
+  /** Notify the other window that this map's custom markers changed, mirroring
+   *  broadcastFoundChange — the receiver just re-fetches the (small) marker list. */
+  function broadcastCustomMarkersChange() {
+    if (!activeMap) return;
+    emit('cta:custom-markers-changed', {
+      gameId: game.id,
+      mapId: activeMap.id,
+      source: windowLabel,
+    }).catch(() => {});
+  }
+
+  // ── Mobile long-press → "Add marker" (desktop uses right-click instead) ───
+  // MapLibre has no built-in long-press event, so we track touchstart/move/end
+  // on the map container ourselves: a 1s hold that doesn't move more than a
+  // small threshold counts as a long-press; any movement past the threshold
+  // (a pan) or lifting early cancels it.
+  const LONG_PRESS_MS = 1000;
+  const LONG_PRESS_MOVE_THRESHOLD_PX = 10;
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let longPressStart: { x: number; y: number } | null = null;
+
+  function cancelLongPress() {
+    if (longPressTimer != null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    longPressStart = null;
+  }
+
+  function handleTouchStart(e: TouchEvent) {
+    if (e.touches.length !== 1) {
+      cancelLongPress();
+      return;
+    }
+    const t = e.touches[0];
+    longPressStart = { x: t.clientX, y: t.clientY };
+    longPressTimer = setTimeout(() => {
+      if (!longPressStart || !mapInstance) return;
+      const rect = mapContainer.getBoundingClientRect();
+      const lngLat = mapInstance.unproject([
+        longPressStart.x - rect.left,
+        longPressStart.y - rect.top,
+      ]);
+      longPressStart = null;
+      openAddMarkerDialog(lngLat);
+    }, LONG_PRESS_MS);
+  }
+
+  function handleTouchMove(e: TouchEvent) {
+    if (!longPressStart || e.touches.length !== 1) {
+      cancelLongPress();
+      return;
+    }
+    const t = e.touches[0];
+    const dx = t.clientX - longPressStart.x;
+    const dy = t.clientY - longPressStart.y;
+    if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_THRESHOLD_PX) {
+      cancelLongPress();
+    }
+  }
+
   let unlistenFound: UnlistenFn | null = null;
+  let unlistenCustomMarkers: UnlistenFn | null = null;
 
   // Push a sentinel history entry when the sidebar opens so that Android's
   // hardware back gesture closes the drawer rather than navigating away.
@@ -396,6 +615,14 @@
 
     window.addEventListener('popstate', onPopState);
 
+    // Mobile has no right-click, so the press-and-hold gesture is its "Add marker" trigger.
+    if (isTauriMobile) {
+      mapContainer.addEventListener('touchstart', handleTouchStart, { passive: true });
+      mapContainer.addEventListener('touchmove', handleTouchMove, { passive: true });
+      mapContainer.addEventListener('touchend', cancelLongPress);
+      mapContainer.addEventListener('touchcancel', cancelLongPress);
+    }
+
     // Two-way live sync of found markers between the main window and the overlay.
     listen<FoundChange>('cta:found-changed', (e) => {
       const p = e.payload;
@@ -405,11 +632,28 @@
     })
       .then((fn) => { unlistenFound = fn; })
       .catch(() => { /* not under Tauri */ });
+
+    // Same pattern for custom markers: the receiver just re-fetches the list.
+    listen<{ gameId: number; mapId: number; source: string }>('cta:custom-markers-changed', (e) => {
+      const p = e.payload;
+      if (p.source === windowLabel) return;
+      if (!activeMap || p.gameId !== game.id || p.mapId !== activeMap.id) return;
+      refreshCustomMarkers();
+    })
+      .then((fn) => { unlistenCustomMarkers = fn; })
+      .catch(() => { /* not under Tauri */ });
   });
 
   onDestroy(() => {
     window.removeEventListener('popstate', onPopState);
+    if (isTauriMobile) {
+      mapContainer.removeEventListener('touchstart', handleTouchStart);
+      mapContainer.removeEventListener('touchmove', handleTouchMove);
+      mapContainer.removeEventListener('touchend', cancelLongPress);
+      mapContainer.removeEventListener('touchcancel', cancelLongPress);
+    }
     unlistenFound?.();
+    unlistenCustomMarkers?.();
     mapInstance?.remove();
   });
 </script>
@@ -459,6 +703,16 @@
 
   {#if sidebarOpen}
     <div class="sidebar-backdrop" role="presentation" onclick={() => closeSidebar()}></div>
+  {/if}
+
+  {#if addMarkerDialogOpen}
+    <AddMarkerDialog
+      initialTitle={addMarkerDialogTitle}
+      initialDescription={addMarkerDialogDescription}
+      onSave={handleMarkerDialogSave}
+      onDelete={editingMarkerId != null ? handleMarkerDialogDelete : undefined}
+      onCancel={handleMarkerDialogCancel}
+    />
   {/if}
 </div>
 
@@ -670,6 +924,38 @@
 
   :global(.popup-toggle.found) {
     background: linear-gradient(135deg, #16a34a, #15803d);
+  }
+
+  :global(.popup-custom-actions) {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  :global(.popup-custom-actions button) {
+    flex: 1;
+    border: none;
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  :global(.popup-edit) {
+    background: linear-gradient(135deg, #7c3aed, #cf30aa);
+    color: #fff;
+  }
+
+  :global(.popup-delete) {
+    background: transparent;
+    border: 1px solid #5b3a50;
+    color: #f87171;
+  }
+
+  :global(.popup-custom-actions button:hover) {
+    opacity: 0.85;
   }
 
   @keyframes popup-spin {

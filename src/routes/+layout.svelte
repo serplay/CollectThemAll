@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { migrateLegacyFoundMarkers } from '../lib/stores/foundMarkers';
 
   // The root layout wraps every page. Its one special job: figure out whether we
   // are the normal main window or the floating "overlay" window, because both load
@@ -23,6 +24,8 @@
   let ready = $state(!isOverlayWindow);
 
   onMount(async () => {
+    // Best-effort, runs once per install — see foundMarkers.ts for the idempotency guards.
+    migrateLegacyFoundMarkers().catch(() => {});
     if (isOverlayWindow && !location.pathname.replace(/\/$/, '').endsWith('/overlay')) {
       await goto('/overlay');
     }

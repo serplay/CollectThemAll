@@ -1,81 +1,110 @@
 /**
  * Persistence layer for tracking which map locations the player has found.
  *
- * Data is stored in localStorage keyed by `found:{gameId}:{mapId}` so each
- * game+map combo gets its own independent set. The store is intentionally
- * frontend-only — no Tauri backend commands needed.
- *
- * Cybersecurity studies note: localStorage is plain, unencrypted text that any
- * script running on this page can read. That is totally fine here because the
- * only thing we keep is "which in-game collectibles has the player ticked off" —
- * not exactly secret data. The lesson from class still stands though: never put
- * passwords, tokens or anything sensitive in localStorage. Also notice we wrap
- * every read in try/catch, because parsing data that came from storage can fail
- * (corrupted/edited value) and we would rather return an empty set than crash.
+ * Data lives in `userdata.sqlite` on the Rust side (see `src-tauri/src/db/userdata.rs`)
+ * rather than localStorage — this is the only door into that table, going through the
+ * `#[tauri::command]`s registered in `lib.rs`. Doing it this way keeps the trust boundary
+ * intact (the frontend never runs SQL directly) and gives us a real file we can back up,
+ * export, or eventually sync.
  */
 
-function storageKey(gameId: number, mapId: number): string {
-  return `found:${gameId}:${mapId}`;
-}
+import { invoke } from '@tauri-apps/api/core';
 
 /** Load the set of found location IDs for a specific game map. */
-export function loadFoundIds(gameId: number, mapId: number): Set<number> {
-  try {
-    const raw = localStorage.getItem(storageKey(gameId, mapId));
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return new Set(parsed);
-    return new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-/** Persist the full set of found location IDs. */
-function saveFoundIds(gameId: number, mapId: number, ids: Set<number>): void {
-  localStorage.setItem(storageKey(gameId, mapId), JSON.stringify([...ids]));
+export async function loadFoundIds(gameId: number, mapId: number): Promise<Set<number>> {
+  const ids = await invoke<number[]>('get_found_ids', { gameId, mapId });
+  return new Set(ids);
 }
 
 /** Replace the full set of found location IDs (used to apply a change pushed from another
- *  window, since WebView windows don't share their in-memory localStorage cache live). */
-export function setFoundIds(gameId: number, mapId: number, ids: Set<number>): void {
-  saveFoundIds(gameId, mapId, ids);
+ *  window, since separate webviews don't share an in-memory cache). */
+export async function setFoundIds(gameId: number, mapId: number, ids: Set<number>): Promise<void> {
+  await invoke('set_found_bulk', { gameId, mapId, ids: [...ids] });
 }
 
 /** Mark a single location as found. Returns the updated set. */
-export function markFound(gameId: number, mapId: number, locationId: number): Set<number> {
-  const ids = loadFoundIds(gameId, mapId);
-  ids.add(locationId);
-  saveFoundIds(gameId, mapId, ids);
-  return ids;
+export async function markFound(
+  gameId: number,
+  mapId: number,
+  locationId: number,
+): Promise<Set<number>> {
+  await invoke('set_found', { gameId, mapId, locationId, found: true });
+  return loadFoundIds(gameId, mapId);
 }
 
 /** Unmark a single location (mark as not found). Returns the updated set. */
-export function unmarkFound(gameId: number, mapId: number, locationId: number): Set<number> {
-  const ids = loadFoundIds(gameId, mapId);
-  ids.delete(locationId);
-  saveFoundIds(gameId, mapId, ids);
-  return ids;
+export async function unmarkFound(
+  gameId: number,
+  mapId: number,
+  locationId: number,
+): Promise<Set<number>> {
+  await invoke('set_found', { gameId, mapId, locationId, found: false });
+  return loadFoundIds(gameId, mapId);
 }
 
 /** Toggle a location's found state. Returns [updatedSet, isNowFound]. */
-export function toggleFound(
+export async function toggleFound(
   gameId: number,
   mapId: number,
-  locationId: number
-): [Set<number>, boolean] {
-  const ids = loadFoundIds(gameId, mapId);
+  locationId: number,
+): Promise<[Set<number>, boolean]> {
+  const ids = await loadFoundIds(gameId, mapId);
   const wasFound = ids.has(locationId);
+  await invoke('set_found', { gameId, mapId, locationId, found: !wasFound });
   if (wasFound) {
     ids.delete(locationId);
   } else {
     ids.add(locationId);
   }
-  saveFoundIds(gameId, mapId, ids);
   return [ids, !wasFound];
 }
 
 /** Clear all found markers for a specific game map. */
-export function clearFound(gameId: number, mapId: number): void {
-  localStorage.removeItem(storageKey(gameId, mapId));
+export async function clearFound(gameId: number, mapId: number): Promise<void> {
+  await invoke('clear_found', { gameId, mapId });
+}
+
+// ── One-time localStorage → SQLite import ──────────────────────────────────
+
+const LEGACY_PREFIX = 'found:';
+const MIGRATION_FLAG = 'cta:foundMigratedToSqlite';
+
+/**
+ * Scrapes any leftover `found:{gameId}:{mapId}` keys out of localStorage (the
+ * old persistence format) and imports them into SQLite once. Safe to call on
+ * every app startup — both the localStorage flag here and a matching `meta`
+ * row on the Rust side make repeat calls a no-op. We intentionally leave the
+ * old localStorage keys in place for one release as a safety net rather than
+ * deleting them immediately.
+ */
+export async function migrateLegacyFoundMarkers(): Promise<void> {
+  try {
+    if (localStorage.getItem(MIGRATION_FLAG)) return;
+
+    const entries: { gameId: number; mapId: number; ids: number[] }[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(LEGACY_PREFIX)) continue;
+      const [, gameIdStr, mapIdStr] = key.split(':');
+      const gameId = Number(gameIdStr);
+      const mapId = Number(mapIdStr);
+      if (!Number.isFinite(gameId) || !Number.isFinite(mapId)) continue;
+      try {
+        const raw = localStorage.getItem(key);
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          entries.push({ gameId, mapId, ids: parsed });
+        }
+      } catch {
+        // Corrupted entry — skip it rather than failing the whole migration.
+      }
+    }
+
+    if (entries.length > 0) {
+      await invoke('import_found_from_storage', { entries });
+    }
+    localStorage.setItem(MIGRATION_FLAG, '1');
+  } catch {
+    // Not under Tauri, or storage unavailable — non-fatal, nothing to migrate yet.
+  }
 }

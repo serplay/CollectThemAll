@@ -23,13 +23,13 @@ export interface MarkerPopupData {
  * Create the popup element.
  *
  * `onToggle` is called when the user clicks the found/unfound button; it should
- * perform the state change and return the new found state, which we use to
- * refresh the button's label. Keeping the state change in the caller means this
- * module stays purely about building DOM.
+ * perform the state change (now an async SQLite write) and resolve with the new
+ * found state, which we use to refresh the button's label. Keeping the state
+ * change in the caller means this module stays purely about building DOM.
  */
 export function buildMarkerPopupElement(
   data: MarkerPopupData,
-  onToggle: () => boolean,
+  onToggle: () => Promise<boolean>,
 ): HTMLElement {
   const hasImage = data.media.length > 0 && data.media[0].type === 'image';
   const mediaHtml = hasImage
@@ -77,10 +77,60 @@ export function buildMarkerPopupElement(
   // refresh the label to match the new state it reports back.
   const btn = popupEl.querySelector('.popup-toggle')!;
   btn.addEventListener('click', () => {
-    const nowFound = onToggle();
-    btn.className = `popup-toggle ${nowFound ? 'found' : ''}`;
-    btn.textContent = nowFound ? '✓ Found — click to unmark' : 'Mark as found';
+    onToggle().then((nowFound) => {
+      btn.className = `popup-toggle ${nowFound ? 'found' : ''}`;
+      btn.textContent = nowFound ? '✓ Found — click to unmark' : 'Mark as found';
+    });
   });
+
+  return popupEl;
+}
+
+/** Display data for a user-created custom marker's popup. */
+export interface CustomMarkerPopupData {
+  title: string;
+  description: string;
+}
+
+/**
+ * Popup shown when clicking a custom marker. Unlike `buildMarkerPopupElement`
+ * (read-only + found toggle, built from semi-trusted downloaded data), this one
+ * is fully the player's own text, with Edit/Delete actions instead of a found
+ * toggle. We still go through `simpleMarkdownToHtml` + `innerHTML` for the
+ * description for visual consistency with the regular popup — same XSS caveat
+ * applies, but the text here is the player's own input on their own machine,
+ * not data from a third party.
+ */
+export function buildCustomMarkerPopupElement(
+  data: CustomMarkerPopupData,
+  onEdit: () => void,
+  onDelete: () => void,
+): HTMLElement {
+  const descHtml = data.description
+    ? `<div class="popup-desc">${simpleMarkdownToHtml(data.description)}</div>`
+    : '';
+
+  const popupEl = document.createElement('div');
+  popupEl.className = 'marker-popup custom-marker-popup';
+  popupEl.innerHTML = `
+    <div class="popup-body">
+      <div class="popup-category">Custom marker</div>
+      <div class="popup-title"></div>
+      ${descHtml}
+      <div class="popup-custom-actions">
+        <button class="popup-edit">Edit</button>
+        <button class="popup-delete">Delete</button>
+      </div>
+    </div>
+  `;
+
+  // Title goes through textContent, not the template string, since (unlike the
+  // description) we don't want any markdown/HTML interpretation of it at all.
+  const titleEl = popupEl.querySelector('.popup-title')!;
+  titleEl.textContent = data.title || 'Untitled marker';
+
+  popupEl.querySelector('.popup-edit')!.addEventListener('click', onEdit);
+  popupEl.querySelector('.popup-delete')!.addEventListener('click', onDelete);
 
   return popupEl;
 }
