@@ -23,6 +23,7 @@
   import ProgressPanel from './ProgressPanel.svelte';
   import CategoryFilters from './CategoryFilters.svelte';
   import AddMarkerDialog from './AddMarkerDialog.svelte';
+  import OfflineDownloadPanel from './OfflineDownloadPanel.svelte';
 
   // Identifies this window so we ignore our own broadcasts (we already updated locally).
   let windowLabel = '';
@@ -677,6 +678,13 @@
       onToggleHideFound={toggleHideFound}
       onClearAll={handleClearAll}
     />
+
+    <hr />
+
+    <!-- Available on every platform (desktop and mobile alike) — the tile fetch
+         itself already runs on the trusted Rust side, so there's no extra risk in
+         exposing the button everywhere; it's purely a frontend UI decision. -->
+    <OfflineDownloadPanel gameId={game.id} />
 
     <hr />
 
