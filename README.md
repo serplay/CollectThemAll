@@ -162,7 +162,7 @@ npm run tauri ios build
 ### iOS limits
 
 - **Overlay is desktop-only.** The always-on-top overlay window and the `Ctrl+Alt+\`` global hotkey are compiled out on mobile (`#[cfg(desktop)]` in Rust) and redirect to `/` as a defence-in-depth measure on the frontend. This is by design.
-- **No bulk tile pre-download on mobile.** The "Download all tiles" commands exist in the Rust backend but are not exposed in the mobile UI. Tiles stream in on demand as you pan and zoom.
+- **Bulk offline download is available, use it sparingly on cellular.** The map sidebar and the library's multi-select mode both let you pre-download a game's tiles. Tiles otherwise stream in on demand as you pan and zoom, so bulk download is optional — a full game's tile set can be a large download over a metered connection.
 
 ## Android
 
@@ -208,7 +208,7 @@ The signed APK is also attached to every GitHub Release automatically by CI.
 ### Android limits
 
 - **Overlay is desktop-only.** The always-on-top overlay window and the `Ctrl+Alt+\`` global hotkey are compiled out on mobile (`#[cfg(desktop)]` in Rust) and redirect to `/` as a defence-in-depth measure on the frontend. This is by design.
-- **No bulk tile pre-download on mobile.** The "Download all tiles" commands exist in the Rust backend but are not exposed in the mobile UI. Tiles stream in on demand as you pan and zoom.
+- **Bulk offline download is available, use it sparingly on cellular.** The map sidebar and the library's multi-select mode both let you pre-download a game's tiles. Tiles otherwise stream in on demand as you pan and zoom, so bulk download is optional — a full game's tile set can be a large download over a metered connection.
 
 ## Project structure
 
