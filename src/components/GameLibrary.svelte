@@ -4,7 +4,9 @@
   import { fade, scale } from 'svelte/transition';
   import { fetchGames, getLocalImageAssetUrl, downloadGameAssets } from '../lib/api/mapgenie';
   import type { Game } from '../lib/types/mapgenie';
+  import { downloadGamesBulk, type BulkProgress } from '../lib/bulkDownload';
   import SearchBar from './SearchBar.svelte';
+  import BulkDownloadBar from './BulkDownloadBar.svelte';
   import { goto } from '$app/navigation';
 
   let games = $state<Game[]>([]);
@@ -19,6 +21,8 @@
   // downloading logic that consumes selectedIds.
   let selectMode = $state(false);
   let selectedIds = $state<Set<number>>(new Set());
+  let bulkProgress = $state<BulkProgress | null>(null);
+  let bulkRunning = $state(false);
 
   let filteredGames = $derived(
     games.filter(game => game.title.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -82,6 +86,31 @@
     selectMode = false;
     selectedIds = new Set();
   }
+
+  async function handleBulkDownload() {
+    // Guard clause: don't let a second bulk download start while one is already
+    // running — mirrors the downloadingId check for the single-game path above.
+    if (bulkRunning) return;
+    const selectedGames = games.filter((g) => selectedIds.has(g.id));
+    if (selectedGames.length === 0) return;
+
+    if (!confirm(`Download ${selectedGames.length} games? This may be a large download.`)) {
+      return;
+    }
+
+    bulkRunning = true;
+    downloadError = null;
+    try {
+      const final = await downloadGamesBulk(selectedGames, (p) => { bulkProgress = p; });
+      if (final.failures.length > 0) {
+        downloadError = `Some games failed to download: ${final.failures.map((f) => f.title).join(', ')}`;
+      }
+    } finally {
+      bulkRunning = false;
+      selectMode = false;
+      selectedIds = new Set();
+    }
+  }
 </script>
 
 <div class="library-container">
@@ -95,11 +124,19 @@
     {:else}
       <button class="select-toggle-btn" onclick={selectAll}>Select all</button>
       <button class="select-toggle-btn" onclick={cancelSelectMode}>Cancel</button>
-      <button class="select-toggle-btn primary" disabled={selectedIds.size === 0}>
+      <button
+        class="select-toggle-btn primary"
+        disabled={selectedIds.size === 0 || bulkRunning}
+        onclick={handleBulkDownload}
+      >
         Download {selectedIds.size} selected
       </button>
     {/if}
   </div>
+
+  {#if bulkProgress}
+    <BulkDownloadBar progress={bulkProgress} running={bulkRunning} />
+  {/if}
 
   {#if downloadError}
     <div class="error-banner" transition:fade={{ duration: 200 }}>{downloadError}</div>
