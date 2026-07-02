@@ -13,6 +13,13 @@
   let downloadingId = $state<number | null>(null);
   let downloadError = $state<string | null>(null);
 
+  // Multi-select mode: lets the user pick several games to bulk-download at once
+  // (see BulkDownloadBar / bulkDownload.ts). Kept as its own commit's worth of
+  // state/UX so the selection mechanics are reviewable separately from the
+  // downloading logic that consumes selectedIds.
+  let selectMode = $state(false);
+  let selectedIds = $state<Set<number>>(new Set());
+
   let filteredGames = $derived(
     games.filter(game => game.title.toLowerCase().includes(searchQuery.toLowerCase()))
   );
@@ -28,6 +35,13 @@
   });
 
   async function handleGameClick(game: Game) {
+    // In select mode a tile click toggles selection instead of opening the game —
+    // keeps the two interaction modes from fighting over the same click handler.
+    if (selectMode) {
+      toggleSelected(game.id);
+      return;
+    }
+
     // Guard clause: if a download is already running, ignore further clicks. This
     // stops the user from kicking off several downloads at once by clicking around
     // — a simple example of validating state before acting, not just trusting the
@@ -47,11 +61,44 @@
       downloadingId = null;
     }
   }
+
+  function toggleSelected(id: number) {
+    const next = new Set(selectedIds);
+    next.has(id) ? next.delete(id) : next.add(id);
+    selectedIds = next;
+  }
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    // Leaving select mode should not leave a stale selection lying around.
+    if (!selectMode) selectedIds = new Set();
+  }
+
+  function selectAll() {
+    selectedIds = new Set(filteredGames.map((g) => g.id));
+  }
+
+  function cancelSelectMode() {
+    selectMode = false;
+    selectedIds = new Set();
+  }
 </script>
 
 <div class="library-container">
   <div class="search-sticky-wrap">
     <SearchBar bind:value={searchQuery} />
+  </div>
+
+  <div class="header-actions">
+    {#if !selectMode}
+      <button class="select-toggle-btn" onclick={toggleSelectMode}>Select</button>
+    {:else}
+      <button class="select-toggle-btn" onclick={selectAll}>Select all</button>
+      <button class="select-toggle-btn" onclick={cancelSelectMode}>Cancel</button>
+      <button class="select-toggle-btn primary" disabled={selectedIds.size === 0}>
+        Download {selectedIds.size} selected
+      </button>
+    {/if}
   </div>
 
   {#if downloadError}
@@ -88,6 +135,11 @@
             {#if downloadingId === game.id}
               <div class="download-overlay" transition:fade={{ duration: 150 }}>
                 <span class="spinner"></span>
+              </div>
+            {/if}
+            {#if selectMode && selectedIds.has(game.id)}
+              <div class="download-overlay selected-overlay" transition:fade={{ duration: 150 }}>
+                <span class="checkmark">✓</span>
               </div>
             {/if}
           </div>
@@ -196,6 +248,54 @@
     width: 100%;
     display: flex;
     justify-content: center;
+  }
+
+  .header-actions {
+    width: 100%;
+    max-width: 1400px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .select-toggle-btn {
+    background: transparent;
+    border: 1px solid #3d3a4f;
+    border-radius: 6px;
+    color: #f6f6f6;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .select-toggle-btn:hover {
+    background: #2a2540;
+  }
+
+  .select-toggle-btn.primary {
+    background: linear-gradient(135deg, #7c3aed, #cf30aa);
+    border: none;
+  }
+
+  .select-toggle-btn.primary:hover {
+    opacity: 0.85;
+  }
+
+  .select-toggle-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .selected-overlay {
+    background: rgba(124, 58, 237, 0.55);
+  }
+
+  .checkmark {
+    color: #fff;
+    font-size: 1.5rem;
+    font-weight: 700;
   }
 
   .loader {
